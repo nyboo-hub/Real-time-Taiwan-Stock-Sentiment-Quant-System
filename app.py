@@ -213,7 +213,7 @@ if st.button("🚀 啟動全方位分析"):
                 
                 today_str = datetime.now().strftime("%Y年%m月%d日")
                 
-                # --- 關鍵修改：要求 AI 同時回傳「數據 JSON」和「完整 Markdown 報告」 ---
+                # --- 嚴格 Prompt 設計 ---
                 prompt = f"""
                 你是一位專業的華爾街量化交易員。
                 今天是 **{today_str}**。
@@ -223,9 +223,9 @@ if st.button("🚀 啟動全方位分析"):
                 {news_text_for_ai}
                 技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}, MA5={ma5_val:.2f}, 布林上軌={upper_val:.2f}, 布林下軌={lower_val:.2f}
                 
-                請以 **JSON 格式** 輸出，必須包含兩個主要欄位：
-                1. `chart_data`: 用於繪圖的數值資料。
-                2. `analysis_report`: 一篇完整的、排版精美的 Markdown 分析報告（包含標題、四個章節、免責聲明）。
+                請以 **純 JSON 格式** 輸出，嚴格遵守 JSON 規範。
+                **重要：所有的換行符號必須轉義為 \\n，絕對不可出現實際的換行符號 (Invalid Control Character)。**
+                **重要：請確保 analysis_report 欄位內的 markdown 字串是有效的 JSON 字串。**
                 
                 JSON 結構範例如下：
                 {{
@@ -234,44 +234,72 @@ if st.button("🚀 啟動全方位分析"):
                         "buy_price": 1030,
                         "sell_price": 1080
                     }},
-                    "analysis_report": "## {stock_name} 雙軌分析報告 - {today_str}\\n\\n1. 🏛️ 技術面分析... (請詳細撰寫)...\\n\\n2. 📰 市場情緒分析...\\n\\n3. 🔮 AI 價格預測...\\n\\n4. ♟️ 交易策略建議...\\n\\n免責聲明..."
+                    "analysis_report": "## 報告標題\\n\\n1. 分析內容...\\n\\n2. 更多內容..."
                 }}
                 """
                 
                 response = model.generate_content(prompt)
                 
-                # JSON 解析與清理
+                # 強制清理與防呆
                 raw_text = response.text
                 clean_text = re.sub(r'```json|```', '', raw_text).strip()
-                ai_data = json.loads(clean_text)
                 
-                # --- 1. 顯示完整的 Markdown 報告 (你要的文字都在這) ---
-                st.markdown(ai_data['analysis_report'])
+                # 嘗試解析 JSON
+                ai_data = None
+                try:
+                    # 加上 strict=False 稍微寬容一點
+                    ai_data = json.loads(clean_text, strict=False)
+                except json.JSONDecodeError:
+                    # 如果解析失敗 (通常是因為換行符號)，啟用「備用方案」：用 Regex 硬抓數字
+                    st.warning("⚠️ AI 回傳格式含有特殊字元，已啟用相容模式解析。")
+                    
+                    # 嘗試抓取目標價
+                    tp_match = re.search(r'"target_price":\s*([\d\.]+)', clean_text)
+                    bp_match = re.search(r'"buy_price":\s*([\d\.]+)', clean_text)
+                    sp_match = re.search(r'"sell_price":\s*([\d\.]+)', clean_text)
+                    
+                    ai_data = {
+                        "chart_data": {
+                            "target_price": float(tp_match.group(1)) if tp_match else last_close,
+                            "buy_price": float(bp_match.group(1)) if bp_match else last_close * 0.95,
+                            "sell_price": float(sp_match.group(1)) if sp_match else last_close * 1.05
+                        },
+                        # 如果 JSON 爛掉，直接顯示原始文字作為報告
+                        "analysis_report": raw_text 
+                    }
+
+                # --- 1. 顯示完整的 Markdown 報告 ---
+                # 如果 analysis_report 是純 JSON 結構 (失敗時)，就顯示 raw_text
+                if "analysis_report" in ai_data:
+                    st.markdown(ai_data['analysis_report'])
+                else:
+                    st.markdown(raw_text) # 最後手段：直接顯示原始回應
                 
                 # --- 2. 畫出預測線 (利用 JSON 裡的數據) ---
-                chart_data = ai_data['chart_data']
-                predicted_price = chart_data['target_price']
-                
-                next_date = last_date + timedelta(days=1)
-                if next_date.weekday() == 5: next_date += timedelta(days=2)
-                elif next_date.weekday() == 6: next_date += timedelta(days=1)
-                
-                # 預測虛線
-                fig.add_trace(go.Scatter(
-                    x=[last_date, next_date],
-                    y=[last_close, predicted_price],
-                    mode="lines+markers",
-                    line=dict(color="red", width=3, dash="dot"),
-                    name=f"AI 預測 ({predicted_price:.2f})"
-                ), row=1, col=1)
-                
-                # 買賣點水平線
-                fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="建議買進", row=1, col=1)
-                fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="建議賣出", row=1, col=1)
+                if 'chart_data' in ai_data and ai_data['chart_data']['target_price'] > 0:
+                    chart_data = ai_data['chart_data']
+                    predicted_price = chart_data['target_price']
+                    
+                    next_date = last_date + timedelta(days=1)
+                    if next_date.weekday() == 5: next_date += timedelta(days=2)
+                    elif next_date.weekday() == 6: next_date += timedelta(days=1)
+                    
+                    # 預測虛線
+                    fig.add_trace(go.Scatter(
+                        x=[last_date, next_date],
+                        y=[last_close, predicted_price],
+                        mode="lines+markers",
+                        line=dict(color="red", width=3, dash="dot"),
+                        name=f"AI 預測 ({predicted_price:.2f})"
+                    ), row=1, col=1)
+                    
+                    # 買賣點水平線
+                    fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="建議買進", row=1, col=1)
+                    fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="建議賣出", row=1, col=1)
 
             except Exception as e:
-                st.error(f"AI 分析或 JSON 解析失敗: {e}")
-                st.caption("建議：請重試一次，有時候 AI 輸出的格式會跑掉。")
+                st.error(f"AI 分析過程發生未預期錯誤: {e}")
+                st.caption("建議：請再試一次，或切換不同模型。")
 
     # 更新圖表
     fig.update_layout(height=600, xaxis_rangeslider_visible=False)
