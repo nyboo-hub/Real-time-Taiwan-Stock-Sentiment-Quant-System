@@ -5,3 +5,4 @@ plotly
 google-generativeai
 GoogleNews
 twstock
+lxml
