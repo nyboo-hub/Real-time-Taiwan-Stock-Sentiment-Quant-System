@@ -4,3 +4,4 @@ pandas
 plotly
 google-generativeai
 GoogleNews
+twstock
