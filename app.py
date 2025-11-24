@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 import json
 import re
-import twstock  # 引入台灣股市套件
+import twstock
 
 # --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 智能台股情緒量化分析系統", layout="wide")
@@ -18,7 +18,7 @@ st.markdown("""
 > **技術架構**：Python ETL Pipeline + Google Gemini LLM + Streamlit Cloud
 """)
 
-# --- 2. 智慧型 API Key 管理 (防呆版) ---
+# --- 2. 智慧型 API Key 管理 ---
 api_key = None
 try:
     if "GEMINI_API_KEY" in st.secrets:
@@ -32,7 +32,7 @@ if not api_key:
         st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # --- 3. 進階模型選擇器 ---
-selected_model_name = "gemini-1.5-flash"
+selected_model_name = "gemma-3n-e4b-it"
 
 if api_key:
     st.sidebar.header("🤖 AI 模型設定")
@@ -55,7 +55,7 @@ if api_key:
         all_options = list(set(target_models + api_models))
         all_options.sort()
         
-        priorities = ['gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemma-3n-e4b-it']
+        priorities = ['gemma-3n-e4b-it', 'gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash']
         for p in reversed(priorities):
             if p in all_options:
                 all_options.remove(p)
@@ -63,31 +63,24 @@ if api_key:
 
         selected_model_name = st.sidebar.selectbox("選擇推論模型 (Model)", all_options, index=0)
         
-        if "preview" in selected_model_name:
+        if "gemma" in selected_model_name:
+            st.sidebar.warning(f"🧪 已啟用實驗性模型: {selected_model_name}")
+        elif "preview" in selected_model_name:
             st.sidebar.success(f"🚀 已啟用最新預覽版: {selected_model_name}")
         elif "flash" in selected_model_name:
             st.sidebar.info(f"⚡ 已啟用高速推論模式")
-        elif "gemma" in selected_model_name:
-            st.sidebar.warning(f"🧪 已啟用實驗性模型: {selected_model_name}")
             
     except Exception as e:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
 
-# --- 4. 股票參數設定 (使用 twstock 套件) ---
+# --- 4. 股票參數設定 ---
 st.sidebar.header("📊 股票參數")
 
 def update_stock_name():
-    # 取得使用者輸入的代號
     input_val = st.session_state.ticker_input.strip()
-    # 嘗試只取數字部分 (以防使用者輸入 2330.TW)
     code = input_val.split('.')[0]
-    
-    # 使用 twstock 套件查詢名稱 (支援上市與上櫃)
     if code in twstock.codes:
         st.session_state.stock_name_input = twstock.codes[code].name
-    else:
-        # 如果查不到 (可能是ETF或新股)，不強制更新，讓使用者自己打
-        pass
 
 ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW", key="ticker_input", on_change=update_stock_name)
 stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
@@ -103,7 +96,7 @@ if st.button("🚀 啟動全方位分析"):
         st.error("❌ 錯誤：未偵測到 API Key。請在側邊欄輸入或檢查 Secrets 設定。")
         st.stop()
 
-    # --- A. 量化分析 (Quantitative Analysis) ---
+    # --- A. 量化分析 ---
     try:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
@@ -117,33 +110,28 @@ if st.button("🚀 啟動全方位分析"):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 統計運算
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['STD'] = df['Close'].rolling(window=20).std()
         df['Upper'] = df['MA20'] + (2 * df['STD']) 
         df['Lower'] = df['MA20'] - (2 * df['STD']) 
 
-        # 計算 RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # 取得最新數據
         last_date = df.index[-1]
-        last_close = df['Close'].iloc[-1]
-        last_change = last_close - df['Close'].iloc[-2]
+        last_close = float(df['Close'].iloc[-1])
+        last_change = last_close - float(df['Close'].iloc[-2])
         last_rsi = df['RSI'].iloc[-1]
         
-        # 技術指標數值
         ma5_val = df['MA5'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
         upper_val = df['Upper'].iloc[-1]
         lower_val = df['Lower'].iloc[-1]
         
-        # 顯示關鍵指標
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("最新收盤", f"{last_close:.2f}", f"{last_change:.2f}")
         c2.metric("MA20 (月線)", f"{ma20_val:.2f}")
@@ -154,21 +142,17 @@ if st.button("🚀 啟動全方位分析"):
         st.error(f"數據分析發生錯誤: {e}")
         st.stop()
 
-    # --- B. 質化分析與預測 (Qualitative Analysis via AI) ---
-    
-    # 初始化圖表
+    # --- B. 質化分析 ---
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.03, subplot_titles=(f'{stock_name} 價格走勢與 AI 預測', 'RSI 強弱指標'),
                         row_width=[0.2, 0.7])
 
-    # 繪製歷史 K 線
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='歷史K線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='orange', width=1), name='MA5'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='blue', width=1), name='MA20'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['Upper'], line=dict(color='gray', width=0), showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], line=dict(color='gray', width=0), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', name='布林通道'), row=1, col=1)
 
-    # 繪製 RSI
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple', width=2), name='RSI'), row=2, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
@@ -194,7 +178,7 @@ if st.button("🚀 啟動全方位分析"):
                         st.caption(f"來源: {item['media']} | 時間: {item['date']}")
                         news_text_for_ai += f"{item['title']} (來源: {item['media']})\n"
                 else:
-                    st.warning("找不到近期新聞，AI 將僅依據歷史數據進行推論。")
+                    st.warning("找不到近期新聞")
                     news_text_for_ai = "查無近期特定新聞，請基於市場一般認知進行分析。"
             except Exception as e:
                 st.error(f"新聞爬蟲失敗: {e}")
@@ -209,7 +193,6 @@ if st.button("🚀 啟動全方位分析"):
                 
                 today_str = datetime.now().strftime("%Y年%m月%d日")
                 
-                # --- 嚴格 Prompt 設計 ---
                 prompt = f"""
                 你是一位專業的華爾街量化交易員。
                 今天是 **{today_str}**。
@@ -220,31 +203,23 @@ if st.button("🚀 啟動全方位分析"):
                 技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}, MA5={ma5_val:.2f}, 布林上軌={upper_val:.2f}, 布林下軌={lower_val:.2f}
                 
                 請以 **純 JSON 格式** 輸出，嚴格遵守 JSON 規範。
-                **重要：所有的換行符號必須轉義為 \\n，絕對不可出現實際的換行符號 (Invalid Control Character)。**
-                **重要：請確保 analysis_report 欄位內的 markdown 字串是有效的 JSON 字串。**
-                
-                JSON 結構與報告格式要求如下（請嚴格照此格式撰寫 analysis_report 內容）：
+                JSON 結構範例：
                 {{
-                    "chart_data": {{
-                        "target_price": 1050.5,
-                        "buy_price": 1030,
-                        "sell_price": 1080
-                    }},
-                    "analysis_report": "## {stock_name} ({ticker}) 雙軌分析報告 - {today_str}\\n\\n1. 🏛️ 技術面分析 (Technical Analysis)\\n趨勢判斷：...\\n支撐與壓力：...\\n\\n2. 📰 市場情緒分析 (Sentiment Analysis)\\n新聞情緒評分：...\\n情緒解讀：...\\n\\n3. 🔮 AI 價格預測 (明日)\\n上漲機率：...% (0-100%)\\n預估漲跌幅：...% (請考慮台股 10% 限制)\\n預估收盤價：... 元\\n理由：...\\n\\n4. ♟️ 交易策略建議\\n🎯 建議買進價：... 元\\n🚀 建議賣出價：... 元\\n綜合點評：...\\n\\n免責聲明：本報告僅供參考，不構成任何投資建議。投資有風險，請謹慎評估，並自行承擔投資風險。本報告的分析結果基於現有資訊，未來市場可能發生變化，請投資者自行判斷。"
+                    "chart_data": {{ "target_price": 1050.5, "buy_price": 1030, "sell_price": 1080 }},
+                    "analysis_report": "## 標題\\n\\n報告內容..."
                 }}
                 """
                 
                 response = model.generate_content(prompt)
-                
-                # 強制清理與防呆
                 raw_text = response.text
                 clean_text = re.sub(r'```json|```', '', raw_text).strip()
                 
                 ai_data = None
                 try:
                     ai_data = json.loads(clean_text, strict=False)
-                except json.JSONDecodeError:
-                    st.warning("⚠️ AI 回傳格式含有特殊字元，已啟用相容模式解析。")
+                except:
+                    st.warning("⚠️ 格式解析啟動相容模式")
+                    # Regex Fallback
                     tp_match = re.search(r'"target_price":\s*([\d\.]+)', clean_text)
                     bp_match = re.search(r'"buy_price":\s*([\d\.]+)', clean_text)
                     sp_match = re.search(r'"sell_price":\s*([\d\.]+)', clean_text)
@@ -263,31 +238,57 @@ if st.button("🚀 啟動全方位分析"):
                 else:
                     st.markdown(raw_text)
                 
-                # --- 關鍵修正：確保預測日期一定是「未來」 ---
-                if 'chart_data' in ai_data and ai_data['chart_data']['target_price'] > 0:
+                if 'chart_data' in ai_data:
                     chart_data = ai_data['chart_data']
-                    predicted_price = chart_data['target_price']
+                    raw_target = chart_data['target_price']
                     
+                    # --- 關鍵修正：Python 邏輯熔斷機制 (Circuit Breaker) ---
+                    # 台灣股市漲跌幅限制為 10%
+                    limit_up = last_close * 1.10
+                    limit_down = last_close * 0.90
+                    
+                    final_target = raw_target
+                    
+                    # 檢查是否超漲或超跌
+                    is_crazy = False
+                    if final_target > limit_up:
+                        final_target = limit_up
+                        is_crazy = True
+                        st.warning(f"⚠️ AI 原始預測 ({raw_target:.2f}) 超出台股漲幅限制，系統已自動修正為漲停價 ({final_target:.2f})。")
+                    elif final_target < limit_down:
+                        final_target = limit_down
+                        is_crazy = True
+                        st.warning(f"⚠️ AI 原始預測 ({raw_target:.2f}) 超出台股跌幅限制，系統已自動修正為跌停價 ({final_target:.2f})。")
+                    
+                    # --- 日期修正：確保畫在明天 ---
                     now = datetime.now()
+                    # 如果資料庫最後日期跟今天差太多(超過3天)，我們就從「今天」開始畫
+                    start_point_date = last_date
+                    start_point_price = last_close
+                    
+                    if (now - last_date).days > 1:
+                        # 補一個今天的點，讓線連起來
+                        start_point_date = now
+                    
                     next_date = now + timedelta(days=1)
-                    while next_date.weekday() > 4:
+                    while next_date.weekday() > 4: # 避開週末
                         next_date += timedelta(days=1)
                     
+                    # 畫出預測線
                     fig.add_trace(go.Scatter(
-                        x=[last_date, next_date],
-                        y=[last_close, predicted_price],
+                        x=[start_point_date, next_date],
+                        y=[start_point_price, final_target],
                         mode="lines+markers",
                         line=dict(color="red", width=3, dash="dot"),
-                        name=f"AI 預測 ({predicted_price:.2f})"
+                        name=f"AI 預測 ({final_target:.2f})"
                     ), row=1, col=1)
                     
+                    # 買賣點
                     fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="買進", row=1, col=1)
                     fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="賣出", row=1, col=1)
 
             except Exception as e:
-                st.error(f"AI 分析過程發生未預期錯誤: {e}")
-                st.caption("建議：請再試一次，或切換不同模型。")
+                st.error(f"分析錯誤: {e}")
 
-    # 更新圖表
     fig.update_layout(height=600, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
