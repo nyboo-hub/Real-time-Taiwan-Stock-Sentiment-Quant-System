@@ -8,6 +8,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 import json
 import re
+import twstock  # 引入台灣股市套件
 
 # --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 智能台股情緒量化分析系統", layout="wide")
@@ -72,26 +73,21 @@ if api_key:
     except Exception as e:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
 
-# --- 4. 股票參數設定 ---
+# --- 4. 股票參數設定 (使用 twstock 套件) ---
 st.sidebar.header("📊 股票參數")
 
-TW_STOCK_MAP = {
-    '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2308': '台達電', '2303': '聯電',
-    '2881': '富邦金', '2882': '國泰金', '2891': '中信金', '2886': '兆豐金', '2884': '玉山金',
-    '2603': '長榮', '2609': '陽明', '2615': '萬海', '2618': '長榮航', '2610': '華航',
-    '3008': '大立光', '3034': '聯詠', '2382': '廣達', '3231': '緯創', '2356': '英業達',
-    '2376': '技嘉', '2357': '華碩', '2412': '中華電', '3045': '台灣大', '4904': '遠傳',
-    '1301': '台塑', '1303': '南亞', '1326': '台化', '6505': '台塑化', '2002': '中鋼',
-    '1101': '台泥', '1216': '統一', '2912': '統一超', '2207': '和泰車', '5871': '中租-KY',
-    '3711': '日月光投控', '2379': '瑞昱', '3037': '欣興', '2345': '智邦', '6669': '緯穎',
-    '1513': '中興電', '1519': '華城', '1504': '東元', '2371': '大同', '6235': '華孚'
-}
-
 def update_stock_name():
-    input_val = st.session_state.ticker_input.upper().strip()
+    # 取得使用者輸入的代號
+    input_val = st.session_state.ticker_input.strip()
+    # 嘗試只取數字部分 (以防使用者輸入 2330.TW)
     code = input_val.split('.')[0]
-    if code in TW_STOCK_MAP:
-        st.session_state.stock_name_input = TW_STOCK_MAP[code]
+    
+    # 使用 twstock 套件查詢名稱 (支援上市與上櫃)
+    if code in twstock.codes:
+        st.session_state.stock_name_input = twstock.codes[code].name
+    else:
+        # 如果查不到 (可能是ETF或新股)，不強制更新，讓使用者自己打
+        pass
 
 ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW", key="ticker_input", on_change=update_stock_name)
 stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
@@ -227,14 +223,14 @@ if st.button("🚀 啟動全方位分析"):
                 **重要：所有的換行符號必須轉義為 \\n，絕對不可出現實際的換行符號 (Invalid Control Character)。**
                 **重要：請確保 analysis_report 欄位內的 markdown 字串是有效的 JSON 字串。**
                 
-                JSON 結構範例如下：
+                JSON 結構與報告格式要求如下（請嚴格照此格式撰寫 analysis_report 內容）：
                 {{
                     "chart_data": {{
                         "target_price": 1050.5,
                         "buy_price": 1030,
                         "sell_price": 1080
                     }},
-                    "analysis_report": "## 報告標題\\n\\n1. 分析內容...\\n\\n2. 更多內容..."
+                    "analysis_report": "## {stock_name} ({ticker}) 雙軌分析報告 - {today_str}\\n\\n1. 🏛️ 技術面分析 (Technical Analysis)\\n趨勢判斷：...\\n支撐與壓力：...\\n\\n2. 📰 市場情緒分析 (Sentiment Analysis)\\n新聞情緒評分：...\\n情緒解讀：...\\n\\n3. 🔮 AI 價格預測 (明日)\\n上漲機率：...% (0-100%)\\n預估漲跌幅：...% (請考慮台股 10% 限制)\\n預估收盤價：... 元\\n理由：...\\n\\n4. ♟️ 交易策略建議\\n🎯 建議買進價：... 元\\n🚀 建議賣出價：... 元\\n綜合點評：...\\n\\n免責聲明：本報告僅供參考，不構成任何投資建議。投資有風險，請謹慎評估，並自行承擔投資風險。本報告的分析結果基於現有資訊，未來市場可能發生變化，請投資者自行判斷。"
                 }}
                 """
                 
@@ -244,16 +240,11 @@ if st.button("🚀 啟動全方位分析"):
                 raw_text = response.text
                 clean_text = re.sub(r'```json|```', '', raw_text).strip()
                 
-                # 嘗試解析 JSON
                 ai_data = None
                 try:
-                    # 加上 strict=False 稍微寬容一點
                     ai_data = json.loads(clean_text, strict=False)
                 except json.JSONDecodeError:
-                    # 如果解析失敗 (通常是因為換行符號)，啟用「備用方案」：用 Regex 硬抓數字
                     st.warning("⚠️ AI 回傳格式含有特殊字元，已啟用相容模式解析。")
-                    
-                    # 嘗試抓取目標價
                     tp_match = re.search(r'"target_price":\s*([\d\.]+)', clean_text)
                     bp_match = re.search(r'"buy_price":\s*([\d\.]+)', clean_text)
                     sp_match = re.search(r'"sell_price":\s*([\d\.]+)', clean_text)
@@ -264,27 +255,24 @@ if st.button("🚀 啟動全方位分析"):
                             "buy_price": float(bp_match.group(1)) if bp_match else last_close * 0.95,
                             "sell_price": float(sp_match.group(1)) if sp_match else last_close * 1.05
                         },
-                        # 如果 JSON 爛掉，直接顯示原始文字作為報告
                         "analysis_report": raw_text 
                     }
 
-                # --- 1. 顯示完整的 Markdown 報告 ---
-                # 如果 analysis_report 是純 JSON 結構 (失敗時)，就顯示 raw_text
                 if "analysis_report" in ai_data:
                     st.markdown(ai_data['analysis_report'])
                 else:
-                    st.markdown(raw_text) # 最後手段：直接顯示原始回應
+                    st.markdown(raw_text)
                 
-                # --- 2. 畫出預測線 (利用 JSON 裡的數據) ---
+                # --- 關鍵修正：確保預測日期一定是「未來」 ---
                 if 'chart_data' in ai_data and ai_data['chart_data']['target_price'] > 0:
                     chart_data = ai_data['chart_data']
                     predicted_price = chart_data['target_price']
                     
-                    next_date = last_date + timedelta(days=1)
-                    if next_date.weekday() == 5: next_date += timedelta(days=2)
-                    elif next_date.weekday() == 6: next_date += timedelta(days=1)
+                    now = datetime.now()
+                    next_date = now + timedelta(days=1)
+                    while next_date.weekday() > 4:
+                        next_date += timedelta(days=1)
                     
-                    # 預測虛線
                     fig.add_trace(go.Scatter(
                         x=[last_date, next_date],
                         y=[last_close, predicted_price],
@@ -293,9 +281,8 @@ if st.button("🚀 啟動全方位分析"):
                         name=f"AI 預測 ({predicted_price:.2f})"
                     ), row=1, col=1)
                     
-                    # 買賣點水平線
-                    fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="建議買進", row=1, col=1)
-                    fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="建議賣出", row=1, col=1)
+                    fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="買進", row=1, col=1)
+                    fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="賣出", row=1, col=1)
 
             except Exception as e:
                 st.error(f"AI 分析過程發生未預期錯誤: {e}")
