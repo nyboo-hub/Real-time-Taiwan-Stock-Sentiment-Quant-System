@@ -144,7 +144,7 @@ if st.button("🚀 啟動全方位分析"):
 
     # --- B. 質化分析 ---
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.03, subplot_titles=(f'{stock_name} 價格走勢與 AI 預測', 'RSI 強弱指標'),
+                        vertical_spacing=0.03, subplot_titles=(f'{stock_name} 價格走勢與 AI 三情境預測', 'RSI 強弱指標'),
                         row_width=[0.2, 0.7])
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='歷史K線'), row=1, col=1)
@@ -193,6 +193,7 @@ if st.button("🚀 啟動全方位分析"):
                 
                 today_str = datetime.now().strftime("%Y年%m月%d日")
                 
+                # --- 關鍵修改：要求 AI 給出三種情境 ---
                 prompt = f"""
                 你是一位專業的華爾街量化交易員。
                 今天是 **{today_str}**。
@@ -200,13 +201,25 @@ if st.button("🚀 啟動全方位分析"):
                 
                 請根據以下新聞與技術指標進行分析：
                 {news_text_for_ai}
-                技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}, MA5={ma5_val:.2f}, 布林上軌={upper_val:.2f}, 布林下軌={lower_val:.2f}
+                技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}, MA5={ma5_val:.2f}
                 
-                請以 **純 JSON 格式** 輸出，嚴格遵守 JSON 規範。
+                請以 **純 JSON 格式** 輸出，包含三種預測情境：
+                1. `target_price`: 目標價 (最可能發生)
+                2. `high_price`: 樂觀情境 (Bull Case)
+                3. `low_price`: 悲觀情境 (Bear Case)
+                
+                **重要：所有的換行符號必須轉義為 \\n**
+                
                 JSON 結構範例：
                 {{
-                    "chart_data": {{ "target_price": 1050.5, "buy_price": 1030, "sell_price": 1080 }},
-                    "analysis_report": "## 標題\\n\\n報告內容..."
+                    "chart_data": {{ 
+                        "target_price": 1350.0, 
+                        "high_price": 1390.0, 
+                        "low_price": 1300.0,
+                        "buy_price": 1320, 
+                        "sell_price": 1380 
+                    }},
+                    "analysis_report": "## {stock_name} 雙軌分析報告 - {today_str}\\n\\n..."
                 }}
                 """
                 
@@ -219,16 +232,18 @@ if st.button("🚀 啟動全方位分析"):
                     ai_data = json.loads(clean_text, strict=False)
                 except:
                     st.warning("⚠️ 格式解析啟動相容模式")
-                    # Regex Fallback
+                    # Regex Fallback for 3 prices
                     tp_match = re.search(r'"target_price":\s*([\d\.]+)', clean_text)
-                    bp_match = re.search(r'"buy_price":\s*([\d\.]+)', clean_text)
-                    sp_match = re.search(r'"sell_price":\s*([\d\.]+)', clean_text)
+                    hp_match = re.search(r'"high_price":\s*([\d\.]+)', clean_text)
+                    lp_match = re.search(r'"low_price":\s*([\d\.]+)', clean_text)
                     
                     ai_data = {
                         "chart_data": {
                             "target_price": float(tp_match.group(1)) if tp_match else last_close,
-                            "buy_price": float(bp_match.group(1)) if bp_match else last_close * 0.95,
-                            "sell_price": float(sp_match.group(1)) if sp_match else last_close * 1.05
+                            "high_price": float(hp_match.group(1)) if hp_match else last_close * 1.02,
+                            "low_price": float(lp_match.group(1)) if lp_match else last_close * 0.98,
+                            "buy_price": last_close * 0.95,
+                            "sell_price": last_close * 1.05
                         },
                         "analysis_report": raw_text 
                     }
@@ -239,53 +254,55 @@ if st.button("🚀 啟動全方位分析"):
                     st.markdown(raw_text)
                 
                 if 'chart_data' in ai_data:
-                    chart_data = ai_data['chart_data']
-                    raw_target = chart_data['target_price']
+                    c_data = ai_data['chart_data']
                     
-                    # --- 關鍵修正：Python 邏輯熔斷機制 (Circuit Breaker) ---
-                    # 台灣股市漲跌幅限制為 10%
-                    limit_up = last_close * 1.10
-                    limit_down = last_close * 0.90
-                    
-                    final_target = raw_target
-                    
-                    # 檢查是否超漲或超跌
-                    is_crazy = False
-                    if final_target > limit_up:
-                        final_target = limit_up
-                        is_crazy = True
-                        st.warning(f"⚠️ AI 原始預測 ({raw_target:.2f}) 超出台股漲幅限制，系統已自動修正為漲停價 ({final_target:.2f})。")
-                    elif final_target < limit_down:
-                        final_target = limit_down
-                        is_crazy = True
-                        st.warning(f"⚠️ AI 原始預測 ({raw_target:.2f}) 超出台股跌幅限制，系統已自動修正為跌停價 ({final_target:.2f})。")
-                    
-                    # --- 日期修正：確保畫在明天 ---
+                    # --- 日期邏輯：從今天畫到明天 ---
                     now = datetime.now()
-                    # 如果資料庫最後日期跟今天差太多(超過3天)，我們就從「今天」開始畫
-                    start_point_date = last_date
-                    start_point_price = last_close
-                    
                     if (now - last_date).days > 1:
-                        # 補一個今天的點，讓線連起來
-                        start_point_date = now
-                    
+                        start_point_date = now # 補點
+                    else:
+                        start_point_date = last_date
+                        
                     next_date = now + timedelta(days=1)
-                    while next_date.weekday() > 4: # 避開週末
+                    while next_date.weekday() > 4:
                         next_date += timedelta(days=1)
                     
-                    # 畫出預測線
+                    # --- 關鍵修改：畫三條線 (扇形預測) ---
+                    # 1. 樂觀情境 (紅色)
                     fig.add_trace(go.Scatter(
                         x=[start_point_date, next_date],
-                        y=[start_point_price, final_target],
-                        mode="lines+markers",
-                        line=dict(color="red", width=3, dash="dot"),
-                        name=f"AI 預測 ({final_target:.2f})"
+                        y=[last_close, c_data.get('high_price', last_close)],
+                        mode="lines+markers+text",
+                        line=dict(color="rgba(255, 0, 0, 0.5)", width=2, dash="dot"), # 半透明紅
+                        name="樂觀預測",
+                        text=[None, f"樂觀: {c_data.get('high_price', 0):.0f}"],
+                        textposition="top right",
+                        textfont=dict(size=14, color="red")
                     ), row=1, col=1)
-                    
-                    # 買賣點
-                    fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="買進", row=1, col=1)
-                    fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="賣出", row=1, col=1)
+
+                    # 2. 悲觀情境 (綠色)
+                    fig.add_trace(go.Scatter(
+                        x=[start_point_date, next_date],
+                        y=[last_close, c_data.get('low_price', last_close)],
+                        mode="lines+markers+text",
+                        line=dict(color="rgba(0, 255, 0, 0.5)", width=2, dash="dot"), # 半透明綠
+                        name="悲觀預測",
+                        text=[None, f"悲觀: {c_data.get('low_price', 0):.0f}"],
+                        textposition="bottom right",
+                        textfont=dict(size=14, color="green")
+                    ), row=1, col=1)
+
+                    # 3. 目標價 (橘色粗線 - 強調)
+                    fig.add_trace(go.Scatter(
+                        x=[start_point_date, next_date],
+                        y=[last_close, c_data.get('target_price', last_close)],
+                        mode="lines+markers+text",
+                        line=dict(color="orange", width=4, dash="solid"), # 實線強調
+                        name="AI 目標價",
+                        text=[None, f"🎯 目標: {c_data.get('target_price', 0):.0f}"],
+                        textposition="middle right",
+                        textfont=dict(size=18, color="orange", family="Arial Black") # 字體加大加粗
+                    ), row=1, col=1)
 
             except Exception as e:
                 st.error(f"分析錯誤: {e}")
