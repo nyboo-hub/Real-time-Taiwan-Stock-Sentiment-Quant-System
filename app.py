@@ -30,7 +30,7 @@ if not api_key:
         api_key = st.text_input("請輸入 Google Gemini API Key", type="password")
         st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
-# --- 3. 進階模型選擇器 (包含所有指定模型) ---
+# --- 3. 進階模型選擇器 ---
 selected_model_name = "gemini-1.5-flash"
 
 if api_key:
@@ -38,26 +38,22 @@ if api_key:
     try:
         genai.configure(api_key=api_key)
         
-        # 定義模型清單 (包含你指定的 Gemma)
         target_models = [
-            'gemma-3n-e4b-it',              # 你指定的特殊模型
-            'gemini-2.5-pro-preview-03-25', # 最新預覽版
-            'gemini-1.5-pro',               # 邏輯最強
-            'gemini-1.5-flash',             # 速度最快
-            'gemini-pro'                    # 舊版保底
+            'gemma-3n-e4b-it',
+            'gemini-2.5-pro-preview-03-25', 
+            'gemini-1.5-pro',               
+            'gemini-1.5-flash',             
+            'gemini-pro'                    
         ]
         
-        # 嘗試抓取 API 實際可用的模型
         try:
             api_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         except:
             api_models = []
             
-        # 合併清單並去重
         all_options = list(set(target_models + api_models))
         all_options.sort()
         
-        # 調整排序：把常用的排在前面
         priorities = ['gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemma-3n-e4b-it']
         for p in reversed(priorities):
             if p in all_options:
@@ -76,10 +72,9 @@ if api_key:
     except Exception as e:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
 
-# --- 4. 股票參數設定 (智慧連動版) ---
+# --- 4. 股票參數設定 ---
 st.sidebar.header("📊 股票參數")
 
-# 熱門台股對照表
 TW_STOCK_MAP = {
     '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2308': '台達電', '2303': '聯電',
     '2881': '富邦金', '2882': '國泰金', '2891': '中信金', '2886': '兆豐金', '2884': '玉山金',
@@ -94,7 +89,6 @@ TW_STOCK_MAP = {
 
 def update_stock_name():
     input_val = st.session_state.ticker_input.upper().strip()
-    # 只取代號部分
     code = input_val.split('.')[0]
     if code in TW_STOCK_MAP:
         st.session_state.stock_name_input = TW_STOCK_MAP[code]
@@ -103,7 +97,6 @@ ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW
 stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
 days = st.sidebar.slider("分析天數範圍", 30, 365, 120)
 
-# 自動防呆：補上 .TW
 if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
@@ -149,7 +142,10 @@ if st.button("🚀 啟動全方位分析"):
         last_rsi = df['RSI'].iloc[-1]
         
         # 技術指標數值
+        ma5_val = df['MA5'].iloc[-1]
         ma20_val = df['MA20'].iloc[-1]
+        upper_val = df['Upper'].iloc[-1]
+        lower_val = df['Lower'].iloc[-1]
         
         # 顯示關鍵指標
         c1, c2, c3, c4 = st.columns(4)
@@ -164,7 +160,7 @@ if st.button("🚀 啟動全方位分析"):
 
     # --- B. 質化分析與預測 (Qualitative Analysis via AI) ---
     
-    # 初始化圖表 (使用 Subplots)
+    # 初始化圖表
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.03, subplot_titles=(f'{stock_name} 價格走勢與 AI 預測', 'RSI 強弱指標'),
                         row_width=[0.2, 0.7])
@@ -217,7 +213,7 @@ if st.button("🚀 啟動全方位分析"):
                 
                 today_str = datetime.now().strftime("%Y年%m月%d日")
                 
-                # Prompt 設計：要求日期準確 + JSON 格式
+                # --- 關鍵修改：要求 AI 同時回傳「數據 JSON」和「完整 Markdown 報告」 ---
                 prompt = f"""
                 你是一位專業的華爾街量化交易員。
                 今天是 **{today_str}**。
@@ -225,24 +221,20 @@ if st.button("🚀 啟動全方位分析"):
                 
                 請根據以下新聞與技術指標進行分析：
                 {news_text_for_ai}
-                技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}
+                技術指標：RSI={last_rsi:.2f}, MA20={ma20_val:.2f}, MA5={ma5_val:.2f}, 布林上軌={upper_val:.2f}, 布林下軌={lower_val:.2f}
                 
-                請以 **JSON 格式** 輸出分析結果，不要有 Markdown 標記，格式如下：
+                請以 **JSON 格式** 輸出，必須包含兩個主要欄位：
+                1. `chart_data`: 用於繪圖的數值資料。
+                2. `analysis_report`: 一篇完整的、排版精美的 Markdown 分析報告（包含標題、四個章節、免責聲明）。
+                
+                JSON 結構範例如下：
                 {{
-                    "sentiment": "利多/利空/中立",
-                    "score": 7,
-                    "key_points": ["重點1", "重點2", "重點3"],
-                    "prediction": {{
-                        "prob_up": 65,
-                        "price_change_percent": 1.5,
-                        "target_price": 1050.5
-                    }},
-                    "strategy": {{
+                    "chart_data": {{
+                        "target_price": 1050.5,
                         "buy_price": 1030,
-                        "sell_price": 1080,
-                        "reason": "簡短策略說明"
+                        "sell_price": 1080
                     }},
-                    "analysis_summary": "這裡寫一段約 100 字的完整綜合分析文字，包含技術面與消息面。"
+                    "analysis_report": "## {stock_name} 雙軌分析報告 - {today_str}\\n\\n1. 🏛️ 技術面分析... (請詳細撰寫)...\\n\\n2. 📰 市場情緒分析...\\n\\n3. 🔮 AI 價格預測...\\n\\n4. ♟️ 交易策略建議...\\n\\n免責聲明..."
                 }}
                 """
                 
@@ -253,20 +245,16 @@ if st.button("🚀 啟動全方位分析"):
                 clean_text = re.sub(r'```json|```', '', raw_text).strip()
                 ai_data = json.loads(clean_text)
                 
-                # 顯示文字報告
-                st.success(f"市場情緒：{ai_data['sentiment']} (評分: {ai_data['score']}/10)")
-                st.info(f"💡 策略：{ai_data['strategy']['reason']}")
-                st.markdown(f"**綜合分析**：{ai_data['analysis_summary']}")
+                # --- 1. 顯示完整的 Markdown 報告 (你要的文字都在這) ---
+                st.markdown(ai_data['analysis_report'])
                 
-                with st.expander("查看詳細預測數據"):
-                    st.json(ai_data)
-
-                # --- 畫出預測線 ---
+                # --- 2. 畫出預測線 (利用 JSON 裡的數據) ---
+                chart_data = ai_data['chart_data']
+                predicted_price = chart_data['target_price']
+                
                 next_date = last_date + timedelta(days=1)
                 if next_date.weekday() == 5: next_date += timedelta(days=2)
                 elif next_date.weekday() == 6: next_date += timedelta(days=1)
-                
-                predicted_price = ai_data['prediction']['target_price']
                 
                 # 預測虛線
                 fig.add_trace(go.Scatter(
@@ -278,8 +266,8 @@ if st.button("🚀 啟動全方位分析"):
                 ), row=1, col=1)
                 
                 # 買賣點水平線
-                fig.add_hline(y=ai_data['strategy']['buy_price'], line_dash="dash", line_color="green", annotation_text="買進", row=1, col=1)
-                fig.add_hline(y=ai_data['strategy']['sell_price'], line_dash="dash", line_color="red", annotation_text="賣出", row=1, col=1)
+                fig.add_hline(y=chart_data['buy_price'], line_dash="dash", line_color="green", annotation_text="建議買進", row=1, col=1)
+                fig.add_hline(y=chart_data['sell_price'], line_dash="dash", line_color="red", annotation_text="建議賣出", row=1, col=1)
 
             except Exception as e:
                 st.error(f"AI 分析或 JSON 解析失敗: {e}")
