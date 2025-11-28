@@ -6,3 +6,5 @@ google-generativeai
 GoogleNews
 twstock
 lxml
+requests
+beautifulsoup4
