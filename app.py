@@ -1,5 +1,5 @@
 # ==========================================
-# 區塊 1: 匯入工具箱 (Import Libraries)
+# 區塊 1: 匯入工具箱
 # ==========================================
 import streamlit as st          
 import yfinance as yf           
@@ -20,15 +20,15 @@ import time
 # ==========================================
 # 區塊 2: 網頁基礎設定
 # ==========================================
-st.set_page_config(page_title="AI 智能台股情緒量化分析系統", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統")
+st.set_page_config(page_title="AI 智能台股分析 v3.0", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v3.0)")
 st.markdown("""
 > **專案亮點**：結合 **統計學 (MA/布林通道/RSI)**、**蒙地卡羅模擬 (Risk)** 與 **Generative AI (多源輿情)** 的全方位決策系統。
 > **技術架構**：Python ETL + Gemini LLM + Monte Carlo Simulation + PTT Crawler
 """)
 
 # ==========================================
-# 區塊 3: API 金鑰管理 (資安防護)
+# 區塊 3: API 金鑰管理
 # ==========================================
 api_key = None
 try:
@@ -43,7 +43,7 @@ if not api_key:
         st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # ==========================================
-# 區塊 4: AI 模型選擇器 (下拉選單)
+# 區塊 4: AI 模型選擇器
 # ==========================================
 selected_model_name = "gemma-3n-e4b-it"
 
@@ -87,7 +87,7 @@ if api_key:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
 
 # ==========================================
-# 區塊 5: 股票參數輸入 (前端互動)
+# 區塊 5: 股票參數輸入
 # ==========================================
 st.sidebar.header("📊 股票參數")
 
@@ -110,7 +110,7 @@ if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
 # ==========================================
-# 區塊 6: 核心功能函數定義 (後端邏輯)
+# 區塊 6: 核心功能函數定義
 # ==========================================
 
 @st.cache_data(ttl=300)
@@ -166,26 +166,32 @@ def start_analysis_callback():
 # 1. 建立按鈕
 st.button("🚀 啟動全方位分析", on_click=start_analysis_callback)
 
-# --- 關鍵修正：將 Tabs 的建立移到最外層，確保靜態內容隨時可見 ---
+# 2. 建立分頁 (Tabs) - 移到最外層，確保靜態內容隨時可見
 tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬 (Risk Lab)"])
 
 # --- Tab 2: 蒙地卡羅說明 (永遠顯示) ---
 with tab2:
-        st.markdown(
-            """
-        <div style="background: linear-gradient(90deg, #ff9966, #ff5e62); color: white; padding: 20px; border-radius: 15px; margin: -20px -20px 20px -20px; text-align: center;">
-            <h4>蒙地卡羅圖表解釋</h4>
-            <b>為什麼圖長這樣？</b><br>
-            1. 淡藍色線像扇子越張越開 → 時間越久未來越不確定<br>
-            2. 橘色粗線 = 500 次平均 → 這檔股票真正的長期趨勢<br>
-            3. 95% VaR = 最慘 5% 的情況 → 銀行、金控每天都在看這個數字<br>
-            4. 紅黃綠燈 = 實務風控標準 → 紅燈表示老闆會叫你停損！<br>
-            <b>簡單說：這是用 500 個平行宇宙幫你預演未來會不會爆倉！</b>
-        </div>
-        """,
-            unsafe_allow_html=True
-        )
-        st.header("蒙地卡羅風險模擬")
+    st.header("🎲 蒙地卡羅風險模擬 (Monte Carlo Simulation)")
+    
+    # ────────── 這段是你精心設計的白話解釋，用 Expander 包起來更整潔 ──────────
+    with st.expander("📖 點擊查看：蒙地卡羅模擬是什麼原理？(白話文解說)", expanded=True):
+        st.info("""
+        **為什麼模擬結果長這樣？**
+        
+        1. **起點統一**：所有線都從今天股價開始，因為我們只能從「現在」預測未來。
+        2. **發散路徑**：時間越久，變數越多，所以線條像扇子一樣張開。
+        3. **橘色粗線 (平均預期)**：這是 500 次模擬的平均值，代表最可能的長期趨勢。
+        4. **95% VaR (風險值)**：這是最倒霉的那 5% 情況，代表你的資產縮水底線。
+        
+        **🚦 風控標準：**
+        * 🔴 **紅燈** (>15%)：高風險，建議減碼。
+        * 🟡 **黃燈** (8~15%)：中風險，設好停損。
+        * 🟢 **綠燈** (<8%)：低風險，波動在安全範圍。
+        """)
+    # ───────────────────────────────────────
+    
+    st.caption("基於幾何布朗運動 (GBM) 模型，符合國際量化交易標準")
+
     # 如果還沒按開始分析，顯示提示
     if not st.session_state['analysis_started']:
         st.warning("👈 請先點擊上方「🚀 啟動全方位分析」按鈕，載入股票資料後即可開始模擬～")
@@ -367,7 +373,7 @@ if st.session_state['analysis_started']:
     # 分頁 2: 蒙地卡羅風險模擬 (互動部分)
     # ==========================
     with tab2:
-        st.divider() # 加個分隔線
+        st.divider() # 分隔線
         
         mc_col1, mc_col2 = st.columns([1, 3])
         
@@ -443,4 +449,3 @@ if st.session_state['analysis_started']:
                     if st.button("清除模擬結果"):
                         st.session_state.run_mc = False
                         st.rerun()
-
