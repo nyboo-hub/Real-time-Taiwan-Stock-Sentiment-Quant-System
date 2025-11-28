@@ -12,7 +12,7 @@ import re
 import twstock
 import requests
 from bs4 import BeautifulSoup
-import time  # 用於 Retry 機制
+import time
 
 # --- 1. 網頁設定 ---
 st.set_page_config(page_title="AI 智能台股情緒量化分析系統", layout="wide")
@@ -36,7 +36,8 @@ if not api_key:
         st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # --- 3. 進階模型選擇器 ---
-selected_model_name = "gemini-1.5-flash"
+# 預設改為你指定的 Gemma 模型
+selected_model_name = "gemma-3n-e4b-it"
 
 if api_key:
     st.sidebar.header("🤖 AI 模型設定")
@@ -44,7 +45,7 @@ if api_key:
         genai.configure(api_key=api_key)
         
         target_models = [
-            'gemma-3n-e4b-it',
+            'gemma-3n-e4b-it',              
             'gemini-2.5-pro-preview-03-25', 
             'gemini-1.5-pro',               
             'gemini-1.5-flash',             
@@ -59,7 +60,7 @@ if api_key:
         all_options = list(set(target_models + api_models))
         all_options.sort()
         
-        priorities = ['gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemma-3n-e4b-it']
+        priorities = ['gemma-3n-e4b-it', 'gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro']
         for p in reversed(priorities):
             if p in all_options:
                 all_options.remove(p)
@@ -67,12 +68,12 @@ if api_key:
 
         selected_model_name = st.sidebar.selectbox("選擇推論模型 (Model)", all_options, index=0)
         
-        if "preview" in selected_model_name:
+        if "gemma" in selected_model_name:
+            st.sidebar.warning(f"🧪 已啟用實驗性模型: {selected_model_name}")
+        elif "preview" in selected_model_name:
             st.sidebar.success(f"🚀 已啟用最新預覽版: {selected_model_name}")
         elif "flash" in selected_model_name:
             st.sidebar.info(f"⚡ 已啟用高速推論模式")
-        elif "gemma" in selected_model_name:
-            st.sidebar.warning(f"🧪 已啟用實驗性模型: {selected_model_name}")
             
     except Exception as e:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
@@ -93,13 +94,10 @@ days = st.sidebar.slider("分析天數範圍", 30, 365, 120)
 if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
-# --- 5. 核心功能函數 (PTT 爬蟲優化版) ---
+# --- 5. 核心功能函數 ---
 
-@st.cache_data(ttl=300) # 快取 5 分鐘，避免頻繁爬取
+@st.cache_data(ttl=300)
 def fetch_ptt_sentiment(keyword, limit=5, retries=3):
-    """
-    抓取 PTT Stock 版標題 (含重試機制與結構防呆)
-    """
     url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Cookie': 'over18=1'}
     
@@ -111,29 +109,24 @@ def fetch_ptt_sentiment(keyword, limit=5, retries=3):
                 titles = soup.find_all('div', class_='title')
                 result = []
                 for t in titles[:limit]:
-                    a_tag = t.find('a') # 防呆：確認有 a 標籤
+                    a_tag = t.find('a')
                     if a_tag:
                         result.append(a_tag.text.strip())
                 return result
         except Exception:
             if attempt < retries - 1:
-                time.sleep(1) # 失敗後等待 1 秒再試
+                time.sleep(1)
                 continue
-    return [] # 若全失敗回傳空列表
+    return []
 
-# --- 新增：蒙地卡羅參數計算快取 (效能優化) ---
 @st.cache_data
 def calculate_metrics(df):
-    """計算波動率與漂移項，避免 slider 變動時重複運算"""
     log_returns = np.log(df['Close'] / df['Close'].shift(1))
     u = log_returns.mean()
     var = log_returns.var()
     daily_volatility = log_returns.std()
-    
-    # Drift = u - (0.5 * var)
     drift = u - (0.5 * var)
     annual_volatility = daily_volatility * np.sqrt(252)
-    
     return log_returns, daily_volatility, drift, annual_volatility
 
 # --- 6. 主程式邏輯 ---
@@ -150,14 +143,12 @@ if st.button("🚀 啟動全方位分析"):
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
         
-        # 抓取資料
         stock_obj = yf.Ticker(ticker)
         df = stock_obj.history(start=start_date, end=end_date)
         
-        # 嘗試抓取 Beta 值 (強化版防呆)
+        # 嘗試抓取 Beta 值
         try:
             stock_info = stock_obj.info
-            # 確保 info 不為 None 且有 beta key
             if not stock_info:
                 beta = 1.0
             else:
@@ -186,6 +177,10 @@ if st.button("🚀 啟動全方位分析"):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
+        # --- 關鍵修正：去除時區資訊 (Timezone-Naive) ---
+        # 這樣才能跟 datetime.now() 做減法運算
+        df.index = df.index.tz_localize(None) 
+        
         last_close = float(df['Close'].iloc[-1])
         last_date = df.index[-1]
 
@@ -203,7 +198,6 @@ if st.button("🚀 啟動全方位分析"):
         c3.metric("RSI (14)", f"{df['RSI'].iloc[-1]:.2f}")
         c4.metric("Beta (波動係數)", f"{beta:.2f}")
 
-        # K 線圖
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.7])
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='orange', width=1), name='MA5'), row=1, col=1)
@@ -255,7 +249,6 @@ if st.button("🚀 啟動全方位分析"):
                     
                     today_str = datetime.now().strftime("%Y年%m月%d日")
                     
-                    # 權重邏輯
                     suggested_weight = 50
                     if beta > 1.2:
                         suggested_weight = 70
@@ -300,6 +293,7 @@ if st.button("🚀 啟動全方位分析"):
                     if 'chart_data' in ai_data:
                         c = ai_data['chart_data']
                         now = datetime.now()
+                        # 使用 naive date 計算，避免時區衝突
                         start_pt = now if (now - last_date).days > 1 else last_date
                         next_dt = now + timedelta(days=1)
                         while next_dt.weekday() > 4: next_dt += timedelta(days=1)
@@ -314,7 +308,7 @@ if st.button("🚀 啟動全方位分析"):
         st.plotly_chart(fig, use_container_width=True)
 
     # ==========================
-    # 分頁 2: 蒙地卡羅風險模擬 (Risk Lab)
+    # 分頁 2: 蒙地卡羅風險模擬
     # ==========================
     with tab2:
         st.header("🎲 蒙地卡羅風險模擬 (Monte Carlo Simulation)")
@@ -322,7 +316,6 @@ if st.button("🚀 啟動全方位分析"):
         
         mc_col1, mc_col2 = st.columns([1, 3])
         
-        # 使用快取函式計算基礎參數，避免 slider 變動時重複計算
         try:
             log_returns, daily_volatility, drift, annual_volatility = calculate_metrics(df)
         except Exception as e:
@@ -347,20 +340,16 @@ if st.button("🚀 啟動全方位分析"):
                     all_paths = []
                     
                     for i in range(n_simulations):
-                        # 隨機漫步公式
                         daily_shocks = drift + daily_volatility * np.random.normal(0, 1, sim_days)
                         price_paths = [last_price]
                         for shock in daily_shocks:
                             price_paths.append(price_paths[-1] * np.exp(shock))
                         all_paths.append(price_paths)
                     
-                    # 繪圖
                     fig_mc = go.Figure()
                     x_axis = list(range(sim_days + 1))
                     
-                    # 畫前 50 條路徑示意
                     for path in all_paths[:100]:
-                        # 優化：加入 hovertemplate 提升互動性
                         fig_mc.add_trace(go.Scatter(
                             x=x_axis, y=path, 
                             mode='lines', 
@@ -369,14 +358,12 @@ if st.button("🚀 啟動全方位分析"):
                             hovertemplate="第%{x}天: $%{y:.2f}"
                         ))
                     
-                    # 平均路徑
                     avg_path = np.mean(all_paths, axis=0)
                     fig_mc.add_trace(go.Scatter(x=x_axis, y=avg_path, mode='lines', line=dict(color='orange', width=3), name='平均預期'))
                     
                     fig_mc.update_layout(title=f"未來 {sim_days} 天股價模擬", xaxis_title="天數", yaxis_title="股價", height=500)
                     st.plotly_chart(fig_mc, use_container_width=True)
                     
-                    # 風險分析
                     final_prices = [p[-1] for p in all_paths]
                     expected_return = (np.mean(final_prices) - last_price) / last_price
                     
@@ -388,7 +375,6 @@ if st.button("🚀 啟動全方位分析"):
                     r2.metric("95% VaR 風險值", f"-{loss_at_risk*100:.2f}%")
                     r3.metric("最差情況資產", f"${initial_investment * (1-loss_at_risk):,.0f}")
                     
-                    # --- 即時警報系統 (Real-time Alert) ---
                     st.markdown("### 🚦 風險監控儀表板")
                     if loss_at_risk > 0.15:
                         st.error(f"🚨 **高風險警報**：95% 機率虧損可能超過 15%！建議啟用熔斷機制或減少持倉。")
@@ -396,3 +382,9 @@ if st.button("🚀 啟動全方位分析"):
                         st.warning(f"⚠️ **中度風險**：波動較大，建議設置停損點。")
                     else:
                         st.success(f"✅ **低風險區域**：資產波動在安全範圍內。")
+```
+
+### 關鍵修正點：
+我在程式碼第 158 行左右加了這句：
+```python
+df.index = df.index.tz_localize(None)
