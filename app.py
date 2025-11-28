@@ -86,6 +86,9 @@ def update_stock_name():
     code = input_val.split('.')[0]
     if code in twstock.codes:
         st.session_state.stock_name_input = twstock.codes[code].name
+    # 切換股票時，清除之前的模擬結果，避免混淆
+    if 'mc_fig' in st.session_state:
+        del st.session_state['mc_fig']
 
 ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW", key="ticker_input", on_change=update_stock_name)
 stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
@@ -121,7 +124,6 @@ def fetch_ptt_sentiment(keyword, limit=5, retries=3):
 
 @st.cache_data
 def calculate_metrics(df):
-    # 這裡計算 log returns，需要避免 log(0) 或負數 (雖然股價通常為正)
     # 使用 ffill 處理潛在的 NaN
     close = df['Close'].ffill()
     log_returns = np.log(close / close.shift(1))
@@ -181,8 +183,7 @@ if st.button("🚀 啟動全方位分析"):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # --- 關鍵修正：去除時區資訊 (Timezone-Naive) ---
-        # 這是為了解決 "Cannot subtract tz-naive and tz-aware datetime-like objects" 錯誤
+        # 去除時區資訊
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         
@@ -298,7 +299,6 @@ if st.button("🚀 啟動全方位分析"):
                     if 'chart_data' in ai_data:
                         c = ai_data['chart_data']
                         now = datetime.now()
-                        # 使用 naive date 計算，避免時區衝突
                         start_pt = now if (now - last_date).days > 1 else last_date
                         next_dt = now + timedelta(days=1)
                         while next_dt.weekday() > 4: next_dt += timedelta(days=1)
@@ -338,6 +338,7 @@ if st.button("🚀 啟動全方位分析"):
             st.metric("日均漂移率 (Drift)", f"{drift*100:.4f}%")
 
         with mc_col2:
+            # --- 關鍵修正：將按鈕觸發的邏輯存入 session_state ---
             if st.button("🎲 開始模擬運算"):
                 with st.spinner("正在計算 1000+ 條平行宇宙路徑..."):
                     
@@ -351,6 +352,7 @@ if st.button("🚀 啟動全方位分析"):
                             price_paths.append(price_paths[-1] * np.exp(shock))
                         all_paths.append(price_paths)
                     
+                    # 繪圖
                     fig_mc = go.Figure()
                     x_axis = list(range(sim_days + 1))
                     
@@ -367,23 +369,33 @@ if st.button("🚀 啟動全方位分析"):
                     fig_mc.add_trace(go.Scatter(x=x_axis, y=avg_path, mode='lines', line=dict(color='orange', width=3), name='平均預期'))
                     
                     fig_mc.update_layout(title=f"未來 {sim_days} 天股價模擬", xaxis_title="天數", yaxis_title="股價", height=500)
-                    st.plotly_chart(fig_mc, use_container_width=True)
                     
+                    # 計算結果
                     final_prices = [p[-1] for p in all_paths]
                     expected_return = (np.mean(final_prices) - last_price) / last_price
-                    
                     var_95_price = np.percentile(final_prices, 5)
                     loss_at_risk = (last_price - var_95_price) / last_price
                     
-                    r1, r2, r3 = st.columns(3)
-                    r1.metric("預期報酬率", f"{expected_return*100:.2f}%")
-                    r2.metric("95% VaR 風險值", f"-{loss_at_risk*100:.2f}%")
-                    r3.metric("最差情況資產", f"${initial_investment * (1-loss_at_risk):,.0f}")
-                    
-                    st.markdown("### 🚦 風險監控儀表板")
-                    if loss_at_risk > 0.15:
-                        st.error(f"🚨 **高風險警報**：95% 機率虧損可能超過 15%！建議啟用熔斷機制或減少持倉。")
-                    elif loss_at_risk > 0.08:
-                        st.warning(f"⚠️ **中度風險**：波動較大，建議設置停損點。")
-                    else:
-                        st.success(f"✅ **低風險區域**：資產波動在安全範圍內。")
+                    # --- 將結果存入 session_state ---
+                    st.session_state['mc_fig'] = fig_mc
+                    st.session_state['mc_return'] = expected_return
+                    st.session_state['mc_risk'] = loss_at_risk
+                    st.session_state['mc_asset'] = initial_investment * (1-loss_at_risk)
+
+            # --- 顯示結果 (如果有存檔) ---
+            if 'mc_fig' in st.session_state:
+                st.plotly_chart(st.session_state['mc_fig'], use_container_width=True)
+                
+                r1, r2, r3 = st.columns(3)
+                r1.metric("預期報酬率", f"{st.session_state['mc_return']*100:.2f}%")
+                r2.metric("95% VaR 風險值", f"-{st.session_state['mc_risk']*100:.2f}%")
+                r3.metric("最差情況資產", f"${st.session_state['mc_asset']:,.0f}")
+                
+                st.markdown("### 🚦 風險監控儀表板")
+                risk = st.session_state['mc_risk']
+                if risk > 0.15:
+                    st.error(f"🚨 **高風險警報**：95% 機率虧損可能超過 15%！建議啟用熔斷機制或減少持倉。")
+                elif risk > 0.08:
+                    st.warning(f"⚠️ **中度風險**：波動較大，建議設置停損點。")
+                else:
+                    st.success(f"✅ **低風險區域**：資產波動在安全範圍內。")
