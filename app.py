@@ -121,7 +121,11 @@ def fetch_ptt_sentiment(keyword, limit=5, retries=3):
 
 @st.cache_data
 def calculate_metrics(df):
-    log_returns = np.log(df['Close'] / df['Close'].shift(1))
+    # 這裡計算 log returns，需要避免 log(0) 或負數 (雖然股價通常為正)
+    # 使用 ffill 處理潛在的 NaN
+    close = df['Close'].ffill()
+    log_returns = np.log(close / close.shift(1))
+    
     u = log_returns.mean()
     var = log_returns.var()
     daily_volatility = log_returns.std()
@@ -178,8 +182,9 @@ if st.button("🚀 啟動全方位分析"):
         df['RSI'] = 100 - (100 / (1 + rs))
 
         # --- 關鍵修正：去除時區資訊 (Timezone-Naive) ---
-        # 這樣才能跟 datetime.now() 做減法運算
-        df.index = df.index.tz_localize(None) 
+        # 這是為了解決 "Cannot subtract tz-naive and tz-aware datetime-like objects" 錯誤
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         
         last_close = float(df['Close'].iloc[-1])
         last_date = df.index[-1]
@@ -382,9 +387,3 @@ if st.button("🚀 啟動全方位分析"):
                         st.warning(f"⚠️ **中度風險**：波動較大，建議設置停損點。")
                     else:
                         st.success(f"✅ **低風險區域**：資產波動在安全範圍內。")
-```
-
-### 關鍵修正點：
-我在程式碼第 158 行左右加了這句：
-```python
-df.index = df.index.tz_localize(None)
