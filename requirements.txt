@@ -9,3 +9,4 @@ twstock
 requests
 beautifulsoup4
 requests-cache
+lxml
