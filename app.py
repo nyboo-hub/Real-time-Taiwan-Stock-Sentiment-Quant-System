@@ -1,27 +1,27 @@
 # ==========================================
 # 區塊 1: 匯入工具箱
 # ==========================================
-import streamlit as st          
-import yfinance as yf           
-import pandas as pd             
-import numpy as np              
-import plotly.graph_objects as go 
-from plotly.subplots import make_subplots 
-from GoogleNews import GoogleNews 
-import google.generativeai as genai 
-from datetime import datetime, timedelta 
-import json     
-import re       
-import twstock  
-import requests 
-from bs4 import BeautifulSoup 
-import time     
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from GoogleNews import GoogleNews
+import google.generativeai as genai
+from datetime import datetime, timedelta
+import json
+import re
+import twstock
+import requests
+from bs4 import BeautifulSoup
+import time
 
 # ==========================================
 # 區塊 2: 網頁基礎設定
 # ==========================================
-st.set_page_config(page_title="AI 智能台股分析 v3.0", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統 (v3.0)")
+st.set_page_config(page_title="AI 智能台股分析 v3.1", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v3.1)")
 st.markdown("""
 > **專案亮點**：結合 **統計學 (MA/布林通道/RSI)**、**蒙地卡羅模擬 (Risk)** 與 **Generative AI (多源輿情)** 的全方位決策系統。
 > **技術架構**：Python ETL + Gemini LLM + Monte Carlo Simulation + PTT Crawler
@@ -35,7 +35,7 @@ try:
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
 except:
-    pass 
+    pass
 
 if not api_key:
     with st.sidebar.expander("🔐 API Key 設定", expanded=True):
@@ -47,17 +47,17 @@ if not api_key:
 # ==========================================
 selected_model_name = "gemma-3n-e4b-it"
 
-if api_key: 
+if api_key:
     st.sidebar.header("🤖 AI 模型設定")
     try:
         genai.configure(api_key=api_key)
         
         target_models = [
-            'gemma-3n-e4b-it',              
-            'gemini-2.5-pro-preview-03-25', 
-            'gemini-1.5-pro',               
-            'gemini-1.5-flash',             
-            'gemini-pro'                    
+            'gemma-3n-e4b-it',
+            'gemini-2.5-pro-preview-03-25',
+            'gemini-1.5-pro',
+            'gemini-1.5-flash',
+            'gemini-pro'
         ]
         
         try:
@@ -71,8 +71,8 @@ if api_key:
         priorities = ['gemma-3n-e4b-it', 'gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro']
         for p in reversed(priorities):
             if p in all_options:
-                all_options.remove(p) 
-                all_options.insert(0, p) 
+                all_options.remove(p)
+                all_options.insert(0, p)
 
         selected_model_name = st.sidebar.selectbox("選擇推論模型 (Model)", all_options, index=0)
         
@@ -106,7 +106,7 @@ ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW
 stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
 days = st.sidebar.slider("分析天數範圍", 30, 365, 120)
 
-if ticker.isdigit(): 
+if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
 # ==========================================
@@ -116,23 +116,27 @@ if ticker.isdigit():
 @st.cache_data(ttl=300)
 def fetch_ptt_sentiment(keyword, limit=5, retries=3):
     url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Cookie': 'over18=1'}
+    # 優化 Header，讓爬蟲更像真人
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Cookie': 'over18=1'
+    }
     
     for attempt in range(retries):
         try:
             response = requests.get(url, headers=headers, timeout=5)
-            if response.status_code == 200: 
-                soup = BeautifulSoup(response.text, 'html.parser') 
-                titles = soup.find_all('div', class_='title') 
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                titles = soup.find_all('div', class_='title')
                 result = []
                 for t in titles[:limit]:
-                    a_tag = t.find('a') 
+                    a_tag = t.find('a')
                     if a_tag:
-                        result.append(a_tag.text.strip()) 
+                        result.append(a_tag.text.strip())
                 return result
         except Exception:
             if attempt < retries - 1:
-                time.sleep(1)
+                time.sleep(1.5) # 稍微睡久一點避開阻擋
                 continue
     return []
 
@@ -141,9 +145,9 @@ def calculate_metrics(df):
     close = df['Close'].ffill()
     log_returns = np.log(close / close.shift(1))
     
-    u = log_returns.mean() 
-    var = log_returns.var() 
-    daily_volatility = log_returns.std() 
+    u = log_returns.mean()
+    var = log_returns.var()
+    daily_volatility = log_returns.std()
     
     drift = u - (0.5 * var)
     annual_volatility = daily_volatility * np.sqrt(252)
@@ -166,33 +170,27 @@ def start_analysis_callback():
 # 1. 建立按鈕
 st.button("🚀 啟動全方位分析", on_click=start_analysis_callback)
 
-# 2. 建立分頁 (Tabs) - 移到最外層，確保靜態內容隨時可見
+# 2. 建立分頁 (Tabs)
 tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬 (Risk Lab)"])
 
-# --- Tab 2: 蒙地卡羅說明 (永遠顯示) ---
+# --- Tab 2: 蒙地卡羅說明 ---
 with tab2:
     st.header("🎲 蒙地卡羅風險模擬 (Monte Carlo Simulation)")
-    
-    # ────────── 這段是你精心設計的白話解釋，用 Expander 包起來更整潔 ──────────
     with st.expander("📖 點擊查看：蒙地卡羅模擬是什麼原理？(白話文解說)", expanded=True):
         st.info("""
         **為什麼模擬結果長這樣？**
-        
-        1. **起點統一**：所有線都從今天股價開始，因為我們只能從「現在」預測未來。
-        2. **發散路徑**：時間越久，變數越多，所以線條像扇子一樣張開。
-        3. **橘色粗線 (平均預期)**：這是 500 次模擬的平均值，代表最可能的長期趨勢。
-        4. **95% VaR (風險值)**：這是最倒霉的那 5% 情況，代表你的資產縮水底線。
+        1. **起點統一**：所有線都從今天股價開始。
+        2. **發散路徑**：時間越久，變數越多，線條像扇子張開。
+        3. **橘色粗線 (平均預期)**：500 次模擬的平均，代表最可能的趨勢。
+        4. **95% VaR (風險值)**：最倒霉的那 5% 情況，代表資產縮水底線。
         
         **🚦 風控標準：**
         * 🔴 **紅燈** (>15%)：高風險，建議減碼。
         * 🟡 **黃燈** (8~15%)：中風險，設好停損。
         * 🟢 **綠燈** (<8%)：低風險，波動在安全範圍。
         """)
-    # ───────────────────────────────────────
-    
     st.caption("基於幾何布朗運動 (GBM) 模型，符合國際量化交易標準")
 
-    # 如果還沒按開始分析，顯示提示
     if not st.session_state['analysis_started']:
         st.warning("👈 請先點擊上方「🚀 啟動全方位分析」按鈕，載入股票資料後即可開始模擬～")
 
@@ -201,11 +199,11 @@ if not st.session_state['analysis_started']:
     with tab1:
         st.info("👈 請在左側設定參數，並點擊上方「🚀 啟動全方位分析」按鈕開始。")
 
-# 4. 如果按鈕被按過，才執行資料抓取與後續邏輯
+# 4. 執行資料抓取與邏輯
 if st.session_state['analysis_started']:
     if not api_key:
         st.error("❌ 錯誤：未偵測到 API Key。")
-        st.stop() 
+        st.stop()
 
     # --- 共用資料處理 (ETL) ---
     try:
@@ -214,6 +212,14 @@ if st.session_state['analysis_started']:
         
         stock_obj = yf.Ticker(ticker)
         df = stock_obj.history(start=start_date, end=end_date)
+        
+        # 🛡️ 除錯檢查點 (Debug Point)
+        if df.empty:
+            st.error(f"⚠️ 抓不到 {ticker} 的資料！\n\n可能原因：\n1. 股票代號錯誤 (台股請確認 .TW)\n2. Yahoo API 暫時連不上\n3. 該股票已下市")
+            st.stop() # 停止執行
+        else:
+            # 顯示成功訊息 (確認資料有進來)
+            st.toast(f"✅ 成功載入 {len(df)} 筆交易資料", icon="📊")
         
         try:
             stock_info = stock_obj.info
@@ -225,18 +231,14 @@ if st.session_state['analysis_started']:
         except:
             beta = 1.0
         
-        if df.empty:
-            st.error(f"找不到 {ticker} 的股價資料。")
-            st.stop()
-            
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        df['MA5'] = df['Close'].rolling(window=5).mean()   
-        df['MA20'] = df['Close'].rolling(window=20).mean() 
-        df['STD'] = df['Close'].rolling(window=20).std()   
-        df['Upper'] = df['MA20'] + (2 * df['STD']) 
-        df['Lower'] = df['MA20'] - (2 * df['STD']) 
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['STD'] = df['Close'].rolling(window=20).std()
+        df['Upper'] = df['MA20'] + (2 * df['STD'])
+        df['Lower'] = df['MA20'] - (2 * df['STD'])
         
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -251,7 +253,7 @@ if st.session_state['analysis_started']:
         last_date = df.index[-1]
 
     except Exception as e:
-        st.error(f"數據處理錯誤: {e}")
+        st.error(f"數據處理嚴重錯誤: {e}")
         st.stop()
 
     # ==========================
@@ -291,9 +293,9 @@ if st.session_state['analysis_started']:
                         st.write(f"- [{item['title']}]({item['link']})")
                         news_text_for_ai += f"{item['title']}\n"
                 else:
-                    st.caption("無近期主流新聞")
+                    st.caption("無近期主流新聞 (或 Google 阻擋連線)")
             except:
-                st.caption("新聞連線失敗")
+                st.caption("新聞連線失敗 (Google API 限制)")
             
             st.markdown("**PTT 股版散戶熱議**")
             ptt_titles = fetch_ptt_sentiment(stock_name, limit=3)
@@ -332,7 +334,7 @@ if st.session_state['analysis_started']:
                     2. 綜合主流媒體與散戶論壇的情緒，判斷市場共識。
                     3. 結合技術指標位置 (RSI高低檔)，推算合理目標價。
                     
-                    請以 **純 JSON** 輸出，確保格式正確：
+                    請以 **純 JSON** 輸出，確保格式正確，不要使用 Markdown code block：
                     {{
                         "sentiment_weight": 70,
                         "weight_reason": "理由...",
@@ -341,8 +343,24 @@ if st.session_state['analysis_started']:
                     }}
                     """
                     response = model.generate_content(prompt)
-                    clean_text = re.sub(r'```json|```', '', response.text).strip()
-                    ai_data = json.loads(clean_text)
+                    
+                    # 🛡️ 強化 JSON 解析
+                    raw_text = response.text
+                    clean_text = re.sub(r'```json|```', '', raw_text).strip()
+                    # 嘗試抓取第一個 { 到最後一個 }
+                    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+                    if match:
+                        clean_text = match.group(0)
+
+                    try:
+                        ai_data = json.loads(clean_text)
+                    except:
+                        # 解析失敗時的備用方案
+                        ai_data = {
+                            "sentiment_weight": 50,
+                            "weight_reason": "AI 輸出格式解析異常，採用中立設定。",
+                            "analysis_report": raw_text
+                        }
                     
                     if 'sentiment_weight' in ai_data:
                         w = ai_data['sentiment_weight']
@@ -373,7 +391,7 @@ if st.session_state['analysis_started']:
     # 分頁 2: 蒙地卡羅風險模擬 (互動部分)
     # ==========================
     with tab2:
-        st.divider() # 分隔線
+        st.divider()
         
         mc_col1, mc_col2 = st.columns([1, 3])
         
@@ -394,7 +412,6 @@ if st.session_state['analysis_started']:
         with mc_col2:
             col_btn, col_clear = st.columns([1, 4])
             with col_btn:
-                # 按下按鈕，執行運算
                 if st.button("🎲 開始模擬運算", type="primary", use_container_width=True):
                     with st.spinner("正在計算 1000+ 條平行宇宙路徑..."):
                         last_price = last_close
