@@ -15,8 +15,8 @@ from bs4 import BeautifulSoup
 import time
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 智能台股情緒量化分析系統", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統 (v4.0)")
+st.set_page_config(page_title="AI 智能台股分析 v5.0", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v5.0)")
 st.markdown("""
 > **專案亮點**：結合 **統計學 (MA/布林通道/RSI)**、**蒙地卡羅模擬 (Risk)** 與 **Generative AI (多源輿情)** 的全方位決策系統。
 > **技術架構**：Python ETL + Gemini LLM + Monte Carlo Simulation + PTT Crawler
@@ -121,25 +121,30 @@ def fetch_ptt_sentiment(keyword, limit=5, retries=3):
             if attempt < retries - 1:
                 time.sleep(1)
                 continue
-    # Mock Data: 如果 PTT 爬不到，回傳假資料，避免掛掉
-    return [f"[{keyword}] 討論熱度高，散戶關注財報表現", f"[{keyword}] 外資買超，股價有望突破", f"[{keyword}] 技術面強勢整理中"]
+    # Mock PTT Data (如果爬不到，回傳假資料以免掛掉)
+    return [f"[{keyword}] 營收創新高，外資喊買", f"[{keyword}] 技術面突破季線", f"[{keyword}] 散戶信心回籠"]
 
-# 產生模擬股價資料 (當 yfinance 掛掉時用)
+# --- 關鍵修正：產生模擬股價資料 (當 yfinance 掛掉時用) ---
 def generate_mock_data(days=120):
-    dates = pd.date_range(end=datetime.now(), periods=days)
+    # 產生日期索引 (去除時區)
+    dates = pd.date_range(end=datetime.now(), periods=days).normalize()
+    
     # 隨機漫步產生股價
     price = 1000
     prices = []
     for _ in range(days):
-        change = np.random.normal(0, 5)
+        change = np.random.normal(0, 15) # 波動大一點
         price += change
+        if price < 100: price = 100 # 防止跌到負數
         prices.append(price)
     
     df = pd.DataFrame(index=dates)
-    df['Open'] = [p + np.random.normal(0, 2) for p in prices]
-    df['High'] = [p + abs(np.random.normal(0, 5)) for p in prices]
-    df['Low'] = [p - abs(np.random.normal(0, 5)) for p in prices]
+    # 產生 OHLC 資料
     df['Close'] = prices
+    df['Open'] = [p + np.random.normal(0, 5) for p in prices]
+    df['High'] = [max(o, c) + abs(np.random.normal(0, 10)) for o, c in zip(df['Open'], df['Close'])]
+    df['Low'] = [min(o, c) - abs(np.random.normal(0, 10)) for o, c in zip(df['Open'], df['Close'])]
+    
     return df
 
 @st.cache_data
@@ -204,33 +209,36 @@ if st.session_state['analysis_started']:
         st.error("❌ 錯誤：未偵測到 API Key。")
         st.stop() 
 
-    # --- 共用資料處理 (ETL) ---
+    # --- 共用資料處理 (ETL) - 強化版 ---
     try:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
         
+        # 1. 嘗試抓取真實資料
         try:
             stock_obj = yf.Ticker(ticker)
             df = stock_obj.history(start=start_date, end=end_date)
-            # 檢查資料是否為空
-            if df.empty:
-                raise ValueError("Data is empty")
+            # 檢查：如果資料是空的，或者筆數太少(小於5筆算不出MA5)，就當作失敗
+            if df.empty or len(df) < 5:
+                raise ValueError("Data empty or insufficient")
         except Exception as e:
-            # --- 觸發 Mock Data 機制 ---
-            st.toast("⚠️ 無法連接 Yahoo Finance (可能 IP 被擋)，已切換至「演示模式 (Demo Mode)」", icon="🛡️")
+            # 2. 如果失敗，啟用 Mock Data (演示模式)
+            st.toast(f"⚠️ 無法連接 Yahoo Finance (可能 IP 被擋或無資料)，已自動切換至「演示模式 (Demo Mode)」", icon="🛡️")
             df = generate_mock_data(days)
-            beta = 1.2 # 預設假 Beta
+            beta = 1.2 # 演示用的假 Beta
         
+        # 嘗試抓取 Beta 值
         try:
             stock_info = stock_obj.info
             beta = stock_info.get('beta', 1.0)
             if beta is None: beta = 1.0
         except:
-            beta = 1.0
+            beta = 1.0 # 抓不到就用預設值
             
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
+        # 統計指標計算
         df['MA5'] = df['Close'].rolling(window=5).mean()   
         df['MA20'] = df['Close'].rolling(window=20).mean() 
         df['STD'] = df['Close'].rolling(window=20).std()   
@@ -243,6 +251,7 @@ if st.session_state['analysis_started']:
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
+        # 時區修正
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         
@@ -250,11 +259,11 @@ if st.session_state['analysis_started']:
         last_date = df.index[-1]
 
     except Exception as e:
-        st.error(f"嚴重錯誤: {e}")
+        st.error(f"嚴重系統錯誤: {e}")
         st.stop()
 
     # ==========================
-    # 分頁 1: AI 多源分析 (內容顯示)
+    # 分頁 1: AI 多源分析
     # ==========================
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
@@ -347,7 +356,6 @@ if st.session_state['analysis_started']:
                         w = ai_data['sentiment_weight']
                         st.info(f"⚖️ 消息權重: {w}% (Beta校正) | 技術權重: {100-w}%")
                         st.progress(w/100)
-                        st.caption(f"判定理由：{ai_data.get('weight_reason', '無')}")
                     
                     if 'analysis_report' in ai_data:
                         st.markdown(ai_data['analysis_report'])
@@ -374,7 +382,6 @@ if st.session_state['analysis_started']:
     # 分頁 2: 蒙地卡羅風險模擬
     # ==========================
     with tab2:
-        # (這裡的代碼跟上一版一樣，無需變動)
         st.divider() 
         mc_col1, mc_col2 = st.columns([1, 3])
         try:
