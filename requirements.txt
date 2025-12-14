@@ -1,12 +1,10 @@
 streamlit
-yfinance>=0.2.40
+yfinance
 pandas
-numpy
 plotly
 google-generativeai
-duckduckgo-search
+GoogleNews
 twstock
+lxml
 requests
 beautifulsoup4
-requests-cache
-lxml
