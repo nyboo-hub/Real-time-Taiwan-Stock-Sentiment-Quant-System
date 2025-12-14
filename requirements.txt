@@ -1,5 +1,5 @@
 streamlit
-yfinance
+yfinance>=0.2.40
 pandas
 numpy
 plotly
@@ -8,3 +8,4 @@ duckduckgo-search
 twstock
 requests
 beautifulsoup4
+requests-cache
