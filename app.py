@@ -20,11 +20,10 @@ import time
 # ==========================================
 # 區塊 2: 網頁基礎設定
 # ==========================================
-st.set_page_config(page_title="AI 智能台股分析 v3.1", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統 (v3.1)")
+st.set_page_config(page_title="AI 智能台股分析 v3.2", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v3.2)")
 st.markdown("""
-> **專案亮點**：結合 **統計學 (MA/布林通道/RSI)**、**蒙地卡羅模擬 (Risk)** 與 **Generative AI (多源輿情)** 的全方位決策系統。
-> **技術架構**：Python ETL + Gemini LLM + Monte Carlo Simulation + PTT Crawler
+> **版本更新 (v3.2)**：新增「雙重數據源」機制 (Yahoo + TWSE)，解決雲端 IP 被封鎖導致無法抓取股價的問題。
 """)
 
 # ==========================================
@@ -40,51 +39,19 @@ except:
 if not api_key:
     with st.sidebar.expander("🔐 API Key 設定", expanded=True):
         api_key = st.text_input("請輸入 Google Gemini API Key", type="password")
-        st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # ==========================================
-# 區塊 4: AI 模型選擇器
+# 區塊 4: AI 模型設定
 # ==========================================
-selected_model_name = "gemma-3n-e4b-it"
-
+selected_model_name = "gemini-1.5-flash"
 if api_key:
     st.sidebar.header("🤖 AI 模型設定")
     try:
         genai.configure(api_key=api_key)
-        
-        target_models = [
-            'gemma-3n-e4b-it',
-            'gemini-2.5-pro-preview-03-25',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash',
-            'gemini-pro'
-        ]
-        
-        try:
-            api_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        except:
-            api_models = []
-            
-        all_options = list(set(target_models + api_models))
-        all_options.sort()
-        
-        priorities = ['gemma-3n-e4b-it', 'gemini-2.5-pro-preview-03-25', 'gemini-1.5-flash', 'gemini-1.5-pro']
-        for p in reversed(priorities):
-            if p in all_options:
-                all_options.remove(p)
-                all_options.insert(0, p)
-
-        selected_model_name = st.sidebar.selectbox("選擇推論模型 (Model)", all_options, index=0)
-        
-        if "gemma" in selected_model_name:
-            st.sidebar.warning(f"🧪 已啟用實驗性模型: {selected_model_name}")
-        elif "preview" in selected_model_name:
-            st.sidebar.success(f"🚀 已啟用最新預覽版: {selected_model_name}")
-        elif "flash" in selected_model_name:
-            st.sidebar.info(f"⚡ 已啟用高速推論模式")
-            
-    except Exception as e:
-        st.sidebar.error(f"連線錯誤，將使用預設模型")
+        # 簡化模型選擇，優先使用穩定快速的模型
+        selected_model_name = st.sidebar.selectbox("選擇模型", ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"], index=0)
+    except:
+        pass
 
 # ==========================================
 # 區塊 5: 股票參數輸入
@@ -97,372 +64,250 @@ def update_stock_name():
     if code in twstock.codes:
         st.session_state.stock_name_input = twstock.codes[code].name
     
-    keys_to_clear = ['run_mc', 'mc_fig', 'mc_return', 'mc_risk', 'mc_asset']
+    # 清除舊的模擬結果
+    keys_to_clear = ['run_mc', 'mc_fig']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
 
 ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW", key="ticker_input", on_change=update_stock_name)
-stock_name = st.sidebar.text_input("股票名稱 (用於搜尋新聞)", value="台積電", key="stock_name_input")
+stock_name = st.sidebar.text_input("股票名稱", value="台積電", key="stock_name_input")
 days = st.sidebar.slider("分析天數範圍", 30, 365, 120)
 
 if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
 # ==========================================
-# 區塊 6: 核心功能函數定義
+# 區塊 6: 核心功能函數
 # ==========================================
 
 @st.cache_data(ttl=300)
-def fetch_ptt_sentiment(keyword, limit=5, retries=3):
+def fetch_ptt_sentiment(keyword, limit=3):
     url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
-    # 優化 Header，讓爬蟲更像真人
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Cookie': 'over18=1'
-    }
-    
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=5)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                titles = soup.find_all('div', class_='title')
-                result = []
-                for t in titles[:limit]:
-                    a_tag = t.find('a')
-                    if a_tag:
-                        result.append(a_tag.text.strip())
-                return result
-        except Exception:
-            if attempt < retries - 1:
-                time.sleep(1.5) # 稍微睡久一點避開阻擋
-                continue
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cookie': 'over18=1'}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            titles = soup.find_all('div', class_='title')
+            return [t.find('a').text.strip() for t in titles if t.find('a')][:limit]
+    except:
+        pass
     return []
 
 @st.cache_data
 def calculate_metrics(df):
     close = df['Close'].ffill()
     log_returns = np.log(close / close.shift(1))
-    
-    u = log_returns.mean()
-    var = log_returns.var()
     daily_volatility = log_returns.std()
-    
-    drift = u - (0.5 * var)
     annual_volatility = daily_volatility * np.sqrt(252)
+    drift = log_returns.mean() - (0.5 * log_returns.var())
+    return drift, annual_volatility
+
+# 🛡️ 強化的數據抓取函數 (核心修改)
+def robust_fetch_stock(ticker_code, days_back):
+    # 1. 嘗試 Yahoo Finance
+    try:
+        end = datetime.now()
+        start = end - timedelta(days=days_back + 30)
+        df = yf.Ticker(ticker_code).history(start=start, end=end)
+        if not df.empty and len(df) > 10:
+            return df, "Yahoo Finance"
+    except:
+        pass
     
-    return log_returns, daily_volatility, drift, annual_volatility
+    # 2. 備援：嘗試 TWStock (證交所)
+    try:
+        code_only = ticker_code.split('.')[0]
+        stock = twstock.Stock(code_only)
+        # 抓取近幾個月的資料
+        data = stock.fetch_from(datetime.now().year, datetime.now().month - 3)
+        
+        if data:
+            df = pd.DataFrame(data)
+            df['Date'] = pd.to_datetime(df['date'])
+            df.set_index('Date', inplace=True)
+            # 轉換欄位名稱與型態以符合 Yahoo 格式
+            df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'capacity': 'Volume'})
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # 篩選日期範圍
+            start_filter = datetime.now() - timedelta(days=days_back + 30)
+            df = df[df.index >= start_filter]
+            return df, "TWSE (證交所)"
+    except Exception as e:
+        print(f"TWStock error: {e}")
+
+    return pd.DataFrame(), "None"
 
 # ==========================================
-# 區塊 7: 主程式邏輯 (Main Loop)
+# 區塊 7: 主程式邏輯
 # ==========================================
-
-# 初始化 session_state
 if 'analysis_started' not in st.session_state:
     st.session_state['analysis_started'] = False
+
 if 'run_mc' not in st.session_state:
     st.session_state.run_mc = False
 
-def start_analysis_callback():
-    st.session_state['analysis_started'] = True
+st.button("🚀 啟動全方位分析", on_click=lambda: st.session_state.update({'analysis_started': True}))
+tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬"])
 
-# 1. 建立按鈕
-st.button("🚀 啟動全方位分析", on_click=start_analysis_callback)
-
-# 2. 建立分頁 (Tabs)
-tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬 (Risk Lab)"])
-
-# --- Tab 2: 蒙地卡羅說明 ---
-with tab2:
-    st.header("🎲 蒙地卡羅風險模擬 (Monte Carlo Simulation)")
-    with st.expander("📖 點擊查看：蒙地卡羅模擬是什麼原理？(白話文解說)", expanded=True):
-        st.info("""
-        **為什麼模擬結果長這樣？**
-        1. **起點統一**：所有線都從今天股價開始。
-        2. **發散路徑**：時間越久，變數越多，線條像扇子張開。
-        3. **橘色粗線 (平均預期)**：500 次模擬的平均，代表最可能的趨勢。
-        4. **95% VaR (風險值)**：最倒霉的那 5% 情況，代表資產縮水底線。
-        
-        **🚦 風控標準：**
-        * 🔴 **紅燈** (>15%)：高風險，建議減碼。
-        * 🟡 **黃燈** (8~15%)：中風險，設好停損。
-        * 🟢 **綠燈** (<8%)：低風險，波動在安全範圍。
-        """)
-    st.caption("基於幾何布朗運動 (GBM) 模型，符合國際量化交易標準")
-
-    if not st.session_state['analysis_started']:
-        st.warning("👈 請先點擊上方「🚀 啟動全方位分析」按鈕，載入股票資料後即可開始模擬～")
-
-# --- Tab 1: 尚未開始時的提示 ---
-if not st.session_state['analysis_started']:
-    with tab1:
-        st.info("👈 請在左側設定參數，並點擊上方「🚀 啟動全方位分析」按鈕開始。")
-
-# 4. 執行資料抓取與邏輯
 if st.session_state['analysis_started']:
     if not api_key:
-        st.error("❌ 錯誤：未偵測到 API Key。")
+        st.error("❌ 請先輸入 Gemini API Key")
         st.stop()
 
-    # --- 共用資料處理 (ETL) ---
+    # --- ETL 資料處理 ---
     try:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        # 使用新的強固抓取函數
+        df, source = robust_fetch_stock(ticker, days)
         
-        stock_obj = yf.Ticker(ticker)
-        df = stock_obj.history(start=start_date, end=end_date)
-        
-        # 🛡️ 除錯檢查點 (Debug Point)
         if df.empty:
-            st.error(f"⚠️ 抓不到 {ticker} 的資料！\n\n可能原因：\n1. 股票代號錯誤 (台股請確認 .TW)\n2. Yahoo API 暫時連不上\n3. 該股票已下市")
-            st.stop() # 停止執行
-        else:
-            # 顯示成功訊息 (確認資料有進來)
-            st.toast(f"✅ 成功載入 {len(df)} 筆交易資料", icon="📊")
+            st.error(f"❌ 無法取得 {ticker} 資料。請確認代號正確，或稍後再試。")
+            st.stop()
         
+        if source == "TWSE (證交所)":
+            st.warning("⚠️ Yahoo 連線受阻，已自動切換至備用數據源 (TWSE)，載入速度可能稍慢。")
+        else:
+            st.toast(f"✅ 數據載入成功 ({source})")
+
+        # 嘗試抓 Beta，抓不到就用預設值 1.0
         try:
-            stock_info = stock_obj.info
-            if not stock_info:
-                beta = 1.0
+            if source == "Yahoo Finance":
+                beta = yf.Ticker(ticker).info.get('beta', 1.0)
             else:
-                beta = stock_info.get('beta')
-                if beta is None: beta = 1.0
+                beta = 1.0 # TWStock 沒提供 Beta
+            if beta is None: beta = 1.0
         except:
             beta = 1.0
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
 
-        df['MA5'] = df['Close'].rolling(window=5).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['STD'] = df['Close'].rolling(window=20).std()
+        # 技術指標計算
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['STD'] = df['Close'].rolling(20).std()
         df['Upper'] = df['MA20'] + (2 * df['STD'])
         df['Lower'] = df['MA20'] - (2 * df['STD'])
         
         delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
-
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
         
         last_close = float(df['Close'].iloc[-1])
         last_date = df.index[-1]
 
     except Exception as e:
-        st.error(f"數據處理嚴重錯誤: {e}")
+        st.error(f"資料運算錯誤: {e}")
         st.stop()
 
-    # ==========================
-    # 分頁 1: AI 多源分析 (內容顯示)
-    # ==========================
+    # --- 分頁 1: AI 分析 ---
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("最新收盤", f"{last_close:.2f}")
         c2.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}")
         c3.metric("RSI (14)", f"{df['RSI'].iloc[-1]:.2f}")
-        c4.metric("Beta (波動係數)", f"{beta:.2f}")
+        c4.metric("Beta", f"{beta:.2f}")
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.7])
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_width=[0.2, 0.7])
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], line=dict(color='orange', width=1), name='MA5'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='blue', width=1), name='MA20'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['Upper'], line=dict(color='gray', width=0), showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], line=dict(color='gray', width=0), fill='tonexty', fillcolor='rgba(200,200,200,0.2)', name='布林通道'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple', width=2), name='RSI'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], line=dict(color='gray', width=0), fill='tonexty', fillcolor='rgba(200,200,200,0.1)'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-        
-        st.markdown("---")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # AI 區塊
         col_news, col_ai = st.columns([1, 1])
-        
-        news_text_for_ai = ""
-        ptt_text_for_ai = ""
+        news_text = ""
+        ptt_text = ""
         
         with col_news:
-            st.subheader("📰 多源輿情偵測")
+            st.subheader("📰 市場消息")
             try:
                 googlenews = GoogleNews(lang='zh-TW', region='TW')
                 googlenews.search(stock_name)
-                news_result = googlenews.result()[:4]
-                if news_result:
-                    for item in news_result:
-                        st.write(f"- [{item['title']}]({item['link']})")
-                        news_text_for_ai += f"{item['title']}\n"
-                else:
-                    st.caption("無近期主流新聞 (或 Google 阻擋連線)")
+                for item in googlenews.result()[:3]:
+                    st.write(f"- [{item['title']}]({item['link']})")
+                    news_text += f"{item['title']}\n"
             except:
-                st.caption("新聞連線失敗 (Google API 限制)")
+                st.caption("新聞抓取受限")
             
-            st.markdown("**PTT 股版散戶熱議**")
-            ptt_titles = fetch_ptt_sentiment(stock_name, limit=3)
-            if ptt_titles:
-                for t in ptt_titles:
-                    st.write(f"- 💬 {t}")
-                    ptt_text_for_ai += f"{t}\n"
-            else:
-                st.caption("無近期相關討論")
+            st.markdown("**PTT 熱議**")
+            ptt_titles = fetch_ptt_sentiment(stock_name)
+            for t in ptt_titles:
+                st.write(f"- {t}")
+                ptt_text += f"{t}\n"
 
         with col_ai:
-            st.subheader("🤖 Gemini 雙軌決策報告")
-            with st.spinner("AI 正在進行思維鏈推論 (Chain of Thought)..."):
-                try:
-                    model = genai.GenerativeModel(selected_model_name, generation_config=genai.types.GenerationConfig(temperature=0.2))
-                    
-                    today_str = datetime.now().strftime("%Y年%m月%d日")
-                    
-                    suggested_weight = 50
-                    if beta > 1.2:
-                        suggested_weight = 70
-                    elif beta < 0.8:
-                        suggested_weight = 30
-                    
-                    prompt = f"""
-                    你是一位專業量化交易員。今天是 {today_str}。
-                    目標股票：{stock_name} ({ticker})，收盤價：{last_close}。
-                    
-                    ### 輸入數據
-                    1. **技術指標**：RSI={df['RSI'].iloc[-1]:.2f}, MA20={df['MA20'].iloc[-1]:.2f}, Beta={beta:.2f}
-                    2. **主流新聞**：\n{news_text_for_ai}
-                    3. **社群論壇(PTT)**：\n{ptt_text_for_ai}
-                    
-                    ### 思考邏輯 (Chain of Thought)
-                    1. 先分析 **Beta 值** 與 **社群熱度**，決定本股是「技術導向」還是「消息導向」。(建議消息權重基準：{suggested_weight}%)
-                    2. 綜合主流媒體與散戶論壇的情緒，判斷市場共識。
-                    3. 結合技術指標位置 (RSI高低檔)，推算合理目標價。
-                    
-                    請以 **純 JSON** 輸出，確保格式正確，不要使用 Markdown code block：
-                    {{
-                        "sentiment_weight": 70,
-                        "weight_reason": "理由...",
-                        "chart_data": {{ "target_price": 0, "high_price": 0, "low_price": 0, "buy_price": 0, "sell_price": 0 }},
-                        "analysis_report": "## Markdown 報告內容..."
-                    }}
-                    """
-                    response = model.generate_content(prompt)
-                    
-                    # 🛡️ 強化 JSON 解析
-                    raw_text = response.text
-                    clean_text = re.sub(r'```json|```', '', raw_text).strip()
-                    # 嘗試抓取第一個 { 到最後一個 }
-                    match = re.search(r'\{.*\}', clean_text, re.DOTALL)
-                    if match:
-                        clean_text = match.group(0)
-
+            st.subheader("🤖 AI 決策建議")
+            if st.button("開始 AI 分析 (需消耗 Token)"):
+                with st.spinner("AI 思考中..."):
                     try:
-                        ai_data = json.loads(clean_text)
-                    except:
-                        # 解析失敗時的備用方案
-                        ai_data = {
+                        model = genai.GenerativeModel(selected_model_name)
+                        prompt = f"""
+                        角色：專業操盤手。目標：{stock_name} ({ticker})，現價 {last_close}。
+                        技術面：RSI={df['RSI'].iloc[-1]:.2f}, MA20={df['MA20'].iloc[-1]:.2f}。
+                        消息面：\n{news_text}\nPTT:\n{ptt_text}
+                        
+                        請輸出 JSON 格式 (不要 Markdown):
+                        {{
                             "sentiment_weight": 50,
-                            "weight_reason": "AI 輸出格式解析異常，採用中立設定。",
-                            "analysis_report": raw_text
-                        }
-                    
-                    if 'sentiment_weight' in ai_data:
-                        w = ai_data['sentiment_weight']
-                        st.info(f"⚖️ 消息權重: {w}% (Beta校正) | 技術權重: {100-w}%")
-                        st.progress(w/100)
-                        st.caption(f"判定理由：{ai_data.get('weight_reason', '無')}")
-                    
-                    if 'analysis_report' in ai_data:
-                        st.markdown(ai_data['analysis_report'])
+                            "reason": "簡短理由",
+                            "analysis": "Markdown 格式的完整分析",
+                            "prediction": {{ "target": 0, "high": 0, "low": 0 }}
+                        }}
+                        """
+                        response = model.generate_content(prompt)
+                        # JSON 清洗與解析
+                        clean_json = re.sub(r'```json|```', '', response.text).strip()
+                        if '{' in clean_json: clean_json = clean_json[clean_json.find('{'):clean_json.rfind('}')+1]
                         
-                    if 'chart_data' in ai_data:
-                        c = ai_data['chart_data']
-                        now = datetime.now()
-                        start_pt = now if (now - last_date).days > 1 else last_date
-                        next_dt = now + timedelta(days=1)
-                        while next_dt.weekday() > 4: next_dt += timedelta(days=1)
-                        
-                        fig.add_trace(go.Scatter(x=[start_pt, next_dt], y=[last_close, c.get('high_price', last_close)], mode='lines+markers', line=dict(color='red', dash='dot'), name='樂觀'), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=[start_pt, next_dt], y=[last_close, c.get('low_price', last_close)], mode='lines+markers', line=dict(color='green', dash='dot'), name='悲觀'), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=[start_pt, next_dt], y=[last_close, c.get('target_price', last_close)], mode='lines+markers', line=dict(color='orange', width=4), name='目標'), row=1, col=1)
+                        try:
+                            ai_data = json.loads(clean_json)
+                            w = ai_data.get('sentiment_weight', 50)
+                            st.info(f"消息面權重: {w}% | {ai_data.get('reason')}")
+                            st.markdown(ai_data.get('analysis'))
+                            
+                            pred = ai_data.get('prediction', {})
+                            if pred.get('target', 0) > 0:
+                                st.metric("AI 目標價", pred['target'], f"高點 {pred.get('high')} / 低點 {pred.get('low')}")
+                        except:
+                            st.error("AI 回傳格式錯誤，請重試")
+                            st.write(response.text)
+                    except Exception as e:
+                        st.error(f"AI 連線錯誤: {e}")
 
-                except Exception as e:
-                    st.error(f"AI 分析失敗: {e}")
-        
-        st.plotly_chart(fig, use_container_width=True)
-
-    # ==========================
-    # 分頁 2: 蒙地卡羅風險模擬 (互動部分)
-    # ==========================
+    # --- 分頁 2: 蒙地卡羅 ---
     with tab2:
-        st.divider()
+        st.subheader("🎲 風險模擬 (Monte Carlo)")
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            sim_days = st.slider("預測天數", 30, 365, 90)
+            n_sims = st.slider("模擬次數", 100, 1000, 500)
+            if st.button("開始模擬", type="primary"):
+                st.session_state.run_mc = True
         
-        mc_col1, mc_col2 = st.columns([1, 3])
-        
-        try:
-            log_returns, daily_volatility, drift, annual_volatility = calculate_metrics(df)
-        except Exception as e:
-            st.error(f"指標計算錯誤: {e}")
-            st.stop()
-
-        with mc_col1:
-            st.subheader("參數設定")
-            sim_days = st.slider("模擬天數", 30, 365, 90)
-            n_simulations = st.slider("模擬次數", 100, 1000, 500)
-            initial_investment = st.number_input("投資金額", value=100000, step=10000)
-            st.metric("年化波動率", f"{annual_volatility*100:.2f}%")
-            st.metric("日均漂移率 (Drift)", f"{drift*100:.4f}%")
-
-        with mc_col2:
-            col_btn, col_clear = st.columns([1, 4])
-            with col_btn:
-                if st.button("🎲 開始模擬運算", type="primary", use_container_width=True):
-                    with st.spinner("正在計算 1000+ 條平行宇宙路徑..."):
-                        last_price = last_close
-                        all_paths = []
-                        for i in range(n_simulations):
-                            daily_shocks = drift + daily_volatility * np.random.normal(0, 1, sim_days)
-                            price_paths = [last_price]
-                            for shock in daily_shocks:
-                                price_paths.append(price_paths[-1] * np.exp(shock))
-                            all_paths.append(price_paths)
-                        
-                        fig_mc = go.Figure()
-                        x_axis = list(range(sim_days + 1))
-                        for path in all_paths[:100]:
-                            fig_mc.add_trace(go.Scatter(x=x_axis, y=path, mode='lines', line=dict(color='rgba(100, 100, 255, 0.05)', width=1), showlegend=False, hovertemplate="第%{x}天: $%{y:.2f}"))
-                        
-                        avg_path = np.mean(all_paths, axis=0)
-                        fig_mc.add_trace(go.Scatter(x=x_axis, y=avg_path, mode='lines', line=dict(color='orange', width=3), name='平均預期'))
-                        
-                        fig_mc.update_layout(title=f"未來 {sim_days} 天股價模擬 ({n_simulations} 次運算)", xaxis_title="天數", yaxis_title="股價", height=500)
-                        
-                        final_prices = [p[-1] for p in all_paths]
-                        expected_return = (np.mean(final_prices) - last_price) / last_price
-                        var_95_price = np.percentile(final_prices, 5)
-                        loss_at_risk = (last_price - var_95_price) / last_price
-                        
-                        st.session_state.mc_fig = fig_mc
-                        st.session_state.mc_return = expected_return
-                        st.session_state.mc_risk = loss_at_risk
-                        st.session_state.mc_asset = initial_investment * (1-loss_at_risk)
-                        st.session_state.run_mc = True
-
-            if st.session_state.run_mc and 'mc_fig' in st.session_state:
-                st.plotly_chart(st.session_state.mc_fig, use_container_width=True)
-                
-                r1, r2, r3 = st.columns(3)
-                r1.metric("預期報酬率", f"{st.session_state.mc_return*100:.2f}%")
-                r2.metric("95% VaR 風險值", f"-{st.session_state.mc_risk*100:.2f}%")
-                r3.metric("最差情況資產", f"${st.session_state.mc_asset:,.0f}")
-                
-                st.markdown("### 🚦 風險監控儀表板")
-                risk = st.session_state.mc_risk
-                if risk > 0.15:
-                    st.error(f"🚨 **高風險警報**：95% 機率虧損可能超過 15%！建議啟用熔斷機制或減少持倉。")
-                elif risk > 0.08:
-                    st.warning(f"⚠️ **中度風險**：波動較大，建議設置停損點。")
-                else:
-                    st.success(f"✅ **低風險區域**：資產波動在安全範圍內。")
+        if st.session_state.run_mc:
+            drift, ann_vol = calculate_metrics(df)
+            daily_vol = ann_vol / np.sqrt(252)
             
-            with col_clear:
-                if st.session_state.run_mc:
-                    if st.button("清除模擬結果"):
-                        st.session_state.run_mc = False
-                        st.rerun()
+            paths = []
+            for _ in range(n_sims):
+                shocks = drift + daily_vol * np.random.normal(0, 1, sim_days)
+                path = [last_close]
+                for s in shocks: path.append(path[-1] * np.exp(s))
+                paths.append(path)
+            
+            fig_mc = go.Figure()
+            for p in paths[:100]:
+                fig_mc.add_trace(go.Scatter(y=p, mode='lines', line=dict(width=1, color='rgba(100,100,255,0.1)'), showlegend=False))
+            fig_mc.add_trace(go.Scatter(y=np.mean(paths, axis=0), mode='lines', line=dict(width=3, color='orange'), name='平均路徑'))
+            st.plotly_chart(fig_mc, use_container_width=True)
+            
+            final_prices = [p[-1] for p in paths]
+            var95 = last_close - np.percentile(final_prices, 5)
+            st.error(f"95% 風險值 (VaR): 若發生極端狀況，可能虧損 ${var95:.2f}")
