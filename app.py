@@ -16,14 +16,15 @@ import twstock
 import requests
 from bs4 import BeautifulSoup
 import time
+import random
 
 # ==========================================
 # 區塊 2: 網頁基礎設定
 # ==========================================
-st.set_page_config(page_title="AI 智能台股分析 v3.2", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統 (v3.2)")
+st.set_page_config(page_title="AI 智能台股分析 v3.3 (Force Start)", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v3.3 暴力啟動版)")
 st.markdown("""
-> **版本更新 (v3.2)**：新增「雙重數據源」機制 (Yahoo + TWSE)，解決雲端 IP 被封鎖導致無法抓取股價的問題。
+> **版本特點**：新增 **Mock Data (模擬數據)** 機制。當 Yahoo 與證交所連線皆被封鎖時，系統將自動生成模擬股價，確保應用程式能順利啟動以供測試。
 """)
 
 # ==========================================
@@ -41,15 +42,14 @@ if not api_key:
         api_key = st.text_input("請輸入 Google Gemini API Key", type="password")
 
 # ==========================================
-# 區塊 4: AI 模型設定
+# 區塊 4: AI 模型選擇器
 # ==========================================
 selected_model_name = "gemini-1.5-flash"
 if api_key:
     st.sidebar.header("🤖 AI 模型設定")
     try:
         genai.configure(api_key=api_key)
-        # 簡化模型選擇，優先使用穩定快速的模型
-        selected_model_name = st.sidebar.selectbox("選擇模型", ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"], index=0)
+        selected_model_name = st.sidebar.selectbox("選擇推論模型", ["gemini-1.5-flash", "gemini-1.5-pro"], index=0)
     except:
         pass
 
@@ -63,12 +63,9 @@ def update_stock_name():
     code = input_val.split('.')[0]
     if code in twstock.codes:
         st.session_state.stock_name_input = twstock.codes[code].name
-    
-    # 清除舊的模擬結果
-    keys_to_clear = ['run_mc', 'mc_fig']
+    keys_to_clear = ['run_mc', 'mc_fig', 'mc_return', 'mc_risk', 'mc_asset']
     for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
+        if key in st.session_state: del st.session_state[key]
 
 ticker = st.sidebar.text_input("股票代號 (台股請加 .TW)", value="2330.TW", key="ticker_input", on_change=update_stock_name)
 stock_name = st.sidebar.text_input("股票名稱", value="台積電", key="stock_name_input")
@@ -78,19 +75,19 @@ if ticker.isdigit():
     ticker = f"{ticker}.TW"
 
 # ==========================================
-# 區塊 6: 核心功能函數
+# 區塊 6: 核心功能函數定義
 # ==========================================
 
 @st.cache_data(ttl=300)
 def fetch_ptt_sentiment(keyword, limit=3):
-    url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Cookie': 'over18=1'}
+    # 簡化版 PTT 爬蟲，若失敗直接回傳空值，避免卡住
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            titles = soup.find_all('div', class_='title')
-            return [t.find('a').text.strip() for t in titles if t.find('a')][:limit]
+        url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
+        headers = {'User-Agent': 'Mozilla/5.0', 'Cookie': 'over18=1'}
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            return [t.find('a').text.strip() for t in soup.find_all('div', class_='title') if t.find('a')][:limit]
     except:
         pass
     return []
@@ -99,96 +96,97 @@ def fetch_ptt_sentiment(keyword, limit=3):
 def calculate_metrics(df):
     close = df['Close'].ffill()
     log_returns = np.log(close / close.shift(1))
-    daily_volatility = log_returns.std()
-    annual_volatility = daily_volatility * np.sqrt(252)
     drift = log_returns.mean() - (0.5 * log_returns.var())
-    return drift, annual_volatility
+    annual_volatility = log_returns.std() * np.sqrt(252)
+    return log_returns, log_returns.std(), drift, annual_volatility
 
-# 🛡️ 強化的數據抓取函數 (核心修改)
-def robust_fetch_stock(ticker_code, days_back):
-    # 1. 嘗試 Yahoo Finance
-    try:
-        end = datetime.now()
-        start = end - timedelta(days=days_back + 30)
-        df = yf.Ticker(ticker_code).history(start=start, end=end)
-        if not df.empty and len(df) > 10:
-            return df, "Yahoo Finance"
-    except:
-        pass
+# 🚨🚨🚨 救命用的假資料生成器 🚨🚨🚨
+def generate_mock_data(ticker_name, days_back):
+    st.warning(f"⚠️ 檢測到網路封鎖！正在為 {ticker_name} 生成模擬數據以供測試...")
     
-    # 2. 備援：嘗試 TWStock (證交所)
+    # 建立日期索引
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days_back + 30)
+    dates = pd.bdate_range(start=start_date, end=end_date)
+    
+    # 隨機漫步生成股價
+    np.random.seed(42) # 固定種子，讓每次跑起來一樣
+    start_price = 1000 if "2330" in ticker_name else 100
+    returns = np.random.normal(loc=0.0005, scale=0.02, size=len(dates))
+    price_path = start_price * (1 + returns).cumprod()
+    
+    data = {
+        'Open': price_path * (1 + np.random.normal(0, 0.005, len(dates))),
+        'High': price_path * (1 + np.abs(np.random.normal(0, 0.01, len(dates)))),
+        'Low': price_path * (1 - np.abs(np.random.normal(0, 0.01, len(dates)))),
+        'Close': price_path,
+        'Volume': np.random.randint(1000, 50000, len(dates)) * 1000
+    }
+    df = pd.DataFrame(data, index=dates)
+    df.index.name = 'Date'
+    return df
+
+def robust_fetch_stock(ticker_code, days_back):
+    # 1. Yahoo
     try:
-        code_only = ticker_code.split('.')[0]
-        stock = twstock.Stock(code_only)
-        # 抓取近幾個月的資料
+        yf_ticker = ticker_code if ".TW" in ticker_code else f"{ticker_code}.TW"
+        df = yf.Ticker(yf_ticker).history(period=f"{int(days_back*1.5)}d")
+        if not df.empty: return df, "Yahoo Finance"
+    except: pass
+    
+    # 2. TWStock
+    try:
+        clean = ticker_code.split('.')[0]
+        stock = twstock.Stock(clean)
         data = stock.fetch_from(datetime.now().year, datetime.now().month - 3)
-        
         if data:
             df = pd.DataFrame(data)
             df['Date'] = pd.to_datetime(df['date'])
             df.set_index('Date', inplace=True)
-            # 轉換欄位名稱與型態以符合 Yahoo 格式
-            df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'capacity': 'Volume'})
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # 篩選日期範圍
-            start_filter = datetime.now() - timedelta(days=days_back + 30)
-            df = df[df.index >= start_filter]
-            return df, "TWSE (證交所)"
-    except Exception as e:
-        print(f"TWStock error: {e}")
+            df = df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'capacity': 'Volume'})
+            for c in ['Close', 'Open', 'High', 'Low', 'Volume']: df[c] = pd.to_numeric(df[c], errors='coerce')
+            return df, "TWSE"
+    except: pass
 
-    return pd.DataFrame(), "None"
+    # 3. 模擬數據 (保底)
+    return generate_mock_data(ticker_code, days_back), "⚠️ 模擬數據 (Mock Data)"
 
 # ==========================================
 # 區塊 7: 主程式邏輯
 # ==========================================
-if 'analysis_started' not in st.session_state:
-    st.session_state['analysis_started'] = False
 
-if 'run_mc' not in st.session_state:
-    st.session_state.run_mc = False
+# 初始化狀態
+if 'analysis_started' not in st.session_state: st.session_state['analysis_started'] = False
+if 'run_mc' not in st.session_state: st.session_state.run_mc = False
 
 st.button("🚀 啟動全方位分析", on_click=lambda: st.session_state.update({'analysis_started': True}))
 tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬"])
 
+# 說明頁
+with tab2:
+    if not st.session_state['analysis_started']:
+        st.info("👈 請點擊上方按鈕啟動。若網路受阻，系統將自動切換為模擬模式。")
+
 if st.session_state['analysis_started']:
     if not api_key:
-        st.error("❌ 請先輸入 Gemini API Key")
+        st.error("❌ 錯誤：未偵測到 API Key")
         st.stop()
 
-    # --- ETL 資料處理 ---
+    # --- ETL ---
+    df, source = robust_fetch_stock(ticker, days)
+    
+    if "模擬" in source:
+        st.error(f"無法連線至交易所，目前使用：{source}")
+    else:
+        st.toast(f"數據來源：{source}")
+
+    # 技術指標
     try:
-        # 使用新的強固抓取函數
-        df, source = robust_fetch_stock(ticker, days)
-        
-        if df.empty:
-            st.error(f"❌ 無法取得 {ticker} 資料。請確認代號正確，或稍後再試。")
-            st.stop()
-        
-        if source == "TWSE (證交所)":
-            st.warning("⚠️ Yahoo 連線受阻，已自動切換至備用數據源 (TWSE)，載入速度可能稍慢。")
-        else:
-            st.toast(f"✅ 數據載入成功 ({source})")
-
-        # 嘗試抓 Beta，抓不到就用預設值 1.0
-        try:
-            if source == "Yahoo Finance":
-                beta = yf.Ticker(ticker).info.get('beta', 1.0)
-            else:
-                beta = 1.0 # TWStock 沒提供 Beta
-            if beta is None: beta = 1.0
-        except:
-            beta = 1.0
-
-        # 技術指標計算
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df['MA20'] = df['Close'].rolling(20).mean()
         df['STD'] = df['Close'].rolling(20).std()
-        df['Upper'] = df['MA20'] + (2 * df['STD'])
-        df['Lower'] = df['MA20'] - (2 * df['STD'])
-        
+        df['Upper'] = df['MA20'] + 2*df['STD']
+        df['Lower'] = df['MA20'] - 2*df['STD']
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -196,19 +194,18 @@ if st.session_state['analysis_started']:
         df['RSI'] = 100 - (100 / (1 + rs))
         
         last_close = float(df['Close'].iloc[-1])
-        last_date = df.index[-1]
-
+        beta = 1.2 # 模擬模式或失敗時的預設值
     except Exception as e:
-        st.error(f"資料運算錯誤: {e}")
+        st.error(f"運算錯誤: {e}")
         st.stop()
 
-    # --- 分頁 1: AI 分析 ---
+    # --- Tab 1 ---
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("最新收盤", f"{last_close:.2f}")
+        c1.metric("收盤價", f"{last_close:.2f}")
         c2.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}")
-        c3.metric("RSI (14)", f"{df['RSI'].iloc[-1]:.2f}")
-        c4.metric("Beta", f"{beta:.2f}")
+        c3.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}")
+        c4.metric("Beta", f"{beta}")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_width=[0.2, 0.7])
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
@@ -220,79 +217,67 @@ if st.session_state['analysis_started']:
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
         st.plotly_chart(fig, use_container_width=True)
 
-        # AI 區塊
         col_news, col_ai = st.columns([1, 1])
-        news_text = ""
-        ptt_text = ""
+        news_text, ptt_text = "", ""
         
         with col_news:
-            st.subheader("📰 市場消息")
+            st.subheader("📰 市場快訊")
             try:
                 googlenews = GoogleNews(lang='zh-TW', region='TW')
                 googlenews.search(stock_name)
                 for item in googlenews.result()[:3]:
-                    st.write(f"- [{item['title']}]({item['link']})")
-                    news_text += f"{item['title']}\n"
-            except:
-                st.caption("新聞抓取受限")
+                    st.write(f"- {item['title']}")
+                    news_text += item['title']
+            except: st.caption("新聞連線受阻")
             
-            st.markdown("**PTT 熱議**")
-            ptt_titles = fetch_ptt_sentiment(stock_name)
-            for t in ptt_titles:
-                st.write(f"- {t}")
-                ptt_text += f"{t}\n"
+            st.markdown("**PTT 討論**")
+            ptt = fetch_ptt_sentiment(stock_name)
+            if ptt: 
+                for t in ptt: 
+                    st.write(f"- {t}")
+                    ptt_text += t
+            else: st.caption("無資料")
 
         with col_ai:
-            st.subheader("🤖 AI 決策建議")
-            if st.button("開始 AI 分析 (需消耗 Token)"):
-                with st.spinner("AI 思考中..."):
+            st.subheader("🤖 AI 決策")
+            if st.button("生成分析報告"):
+                with st.spinner("AI 運算中..."):
                     try:
                         model = genai.GenerativeModel(selected_model_name)
                         prompt = f"""
-                        角色：專業操盤手。目標：{stock_name} ({ticker})，現價 {last_close}。
-                        技術面：RSI={df['RSI'].iloc[-1]:.2f}, MA20={df['MA20'].iloc[-1]:.2f}。
-                        消息面：\n{news_text}\nPTT:\n{ptt_text}
+                        角色：量化分析師。目標：{stock_name}。現價：{last_close}。
+                        技術面：RSI={df['RSI'].iloc[-1]:.2f}。
+                        新聞：{news_text} PTT：{ptt_text}
                         
-                        請輸出 JSON 格式 (不要 Markdown):
+                        請輸出純 JSON:
                         {{
-                            "sentiment_weight": 50,
+                            "sentiment_weight": 60,
                             "reason": "簡短理由",
-                            "analysis": "Markdown 格式的完整分析",
-                            "prediction": {{ "target": 0, "high": 0, "low": 0 }}
+                            "analysis": "詳細 Markdown 分析",
+                            "prediction": {{ "target": 0 }}
                         }}
                         """
-                        response = model.generate_content(prompt)
-                        # JSON 清洗與解析
-                        clean_json = re.sub(r'```json|```', '', response.text).strip()
-                        if '{' in clean_json: clean_json = clean_json[clean_json.find('{'):clean_json.rfind('}')+1]
+                        res = model.generate_content(prompt)
+                        clean = re.sub(r'```json|```', '', res.text).strip()
+                        if '{' in clean: clean = clean[clean.find('{'):clean.rfind('}')+1]
                         
-                        try:
-                            ai_data = json.loads(clean_json)
-                            w = ai_data.get('sentiment_weight', 50)
-                            st.info(f"消息面權重: {w}% | {ai_data.get('reason')}")
-                            st.markdown(ai_data.get('analysis'))
-                            
-                            pred = ai_data.get('prediction', {})
-                            if pred.get('target', 0) > 0:
-                                st.metric("AI 目標價", pred['target'], f"高點 {pred.get('high')} / 低點 {pred.get('low')}")
-                        except:
-                            st.error("AI 回傳格式錯誤，請重試")
-                            st.write(response.text)
+                        data = json.loads(clean)
+                        st.info(f"建議權重: {data.get('sentiment_weight')}% | {data.get('reason')}")
+                        st.markdown(data.get('analysis'))
                     except Exception as e:
-                        st.error(f"AI 連線錯誤: {e}")
+                        st.error(f"AI 錯誤: {e}")
 
-    # --- 分頁 2: 蒙地卡羅 ---
+    # --- Tab 2: Monte Carlo ---
     with tab2:
-        st.subheader("🎲 風險模擬 (Monte Carlo)")
+        st.subheader("🎲 風險模擬")
         c1, c2 = st.columns([1, 3])
         with c1:
-            sim_days = st.slider("預測天數", 30, 365, 90)
-            n_sims = st.slider("模擬次數", 100, 1000, 500)
-            if st.button("開始模擬", type="primary"):
-                st.session_state.run_mc = True
+            sim_days = st.slider("天數", 30, 365, 90)
+            n_sims = st.slider("次數", 100, 1000, 500)
+            if st.button("開始模擬"): st.session_state.run_mc = True
         
         if st.session_state.run_mc:
-            drift, ann_vol = calculate_metrics(df)
+            ret, vol, drift, ann_vol = calculate_metrics(df)
             daily_vol = ann_vol / np.sqrt(252)
             
             paths = []
@@ -309,5 +294,4 @@ if st.session_state['analysis_started']:
             st.plotly_chart(fig_mc, use_container_width=True)
             
             final_prices = [p[-1] for p in paths]
-            var95 = last_close - np.percentile(final_prices, 5)
-            st.error(f"95% 風險值 (VaR): 若發生極端狀況，可能虧損 ${var95:.2f}")
+            st.metric("預期報酬", f"{(np.mean(final_prices)-last_close)/last_close*100:.2f}%")
