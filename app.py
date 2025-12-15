@@ -15,8 +15,8 @@ from bs4 import BeautifulSoup
 import time
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="AI 智能台股分析 v6.0 (Demo Ready)", layout="wide")
-st.title("📈 AI 智能台股情緒量化分析系統 (v6.0)")
+st.set_page_config(page_title="AI 智能台股分析 v6.2", layout="wide")
+st.title("📈 AI 智能台股情緒量化分析系統 (v6.2)")
 st.markdown("""
 > **專案亮點**：結合 **統計學 (MA/布林通道/RSI)**、**蒙地卡羅模擬 (Risk)** 與 **Generative AI (多源輿情)** 的全方位決策系統。
 > **技術架構**：Python ETL + Gemini LLM + Monte Carlo Simulation + PTT Crawler
@@ -28,12 +28,13 @@ st.sidebar.header("⚙️ 系統設定")
 # 🔥 新增：演示模式開關 (一鍵切換)
 demo_mode = st.sidebar.toggle("🔥 啟用演示模式 (Demo Mode)", value=False, help="開啟後將使用模擬數據與預設 AI 回應，無需 API Key 即可展示功能。")
 
+# --- 2. 智慧型 API Key 管理 ---
+api_key = None
+
 if demo_mode:
     st.sidebar.success("✅ 目前處於演示模式")
     api_key = "demo_key" # 給個假 Key 讓流程繼續
 else:
-    # --- 2. 智慧型 API Key 管理 ---
-    api_key = None
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
@@ -49,6 +50,7 @@ else:
 # 預設改為你指定的 Gemma 模型
 selected_model_name = "gemma-3n-e4b-it"
 
+# 只有在非演示模式且有 API Key 時才顯示模型選擇
 if api_key and not demo_mode: 
     st.sidebar.header("🤖 AI 模型設定")
     try:
@@ -113,7 +115,8 @@ if ticker.isdigit():
 
 @st.cache_data(ttl=300)
 def fetch_ptt_sentiment(keyword, limit=5, retries=3):
-    if demo_mode:
+    # 如果是演示模式，回傳假資料
+    if 'demo_mode' in globals() and demo_mode:
         return [f"[{keyword}] 營收創新高，散戶信心爆棚 (Demo)", f"[{keyword}] 外資調升目標價 (Demo)", f"[{keyword}] 技術面突破前高 (Demo)"]
 
     url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
@@ -179,12 +182,12 @@ def start_analysis_callback():
 # 1. 建立按鈕
 st.button("🚀 啟動全方位分析", on_click=start_analysis_callback)
 
-# 2. 建立分頁
+# 2. 建立分頁 (Tabs) - 移到最外層，確保隨時可見
 tab1, tab2 = st.tabs(["🤖 AI 多源輿情決策", "🎲 蒙地卡羅風險模擬 (Risk Lab)"])
 
-# --- Tab 2: 蒙地卡羅說明 (炫彩版回歸！) ---
+# --- Tab 2: 蒙地卡羅說明 (永遠顯示) ---
 with tab2:
-    # ────────── 這是你指定的炫彩漸層說明框 ──────────
+    # 炫彩漸層說明框
     st.markdown(
         """
         <div style="background: linear-gradient(90deg, #ff9966, #ff5e62); color: white; padding: 20px; border-radius: 15px; margin: 0px 0px 20px 0px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -202,10 +205,10 @@ with tab2:
         """,
         unsafe_allow_html=True
     )
-    # ───────────────────────────────────────
     
     st.caption("基於幾何布朗運動 (GBM) 模型，符合國際量化交易標準")
 
+    # 如果還沒按開始分析，顯示提示
     if not st.session_state['analysis_started']:
         st.warning("👈 請先點擊上方「🚀 啟動全方位分析」按鈕，載入股票資料後即可開始模擬～")
 
@@ -214,7 +217,7 @@ if not st.session_state['analysis_started']:
     with tab1:
         st.info("👈 請在左側設定參數，並點擊上方「🚀 啟動全方位分析」按鈕開始。")
 
-# 4. 執行分析
+# 4. 如果按鈕被按過，才執行資料抓取與後續邏輯
 if st.session_state['analysis_started']:
     if not api_key:
         st.error("❌ 錯誤：未偵測到 API Key。")
@@ -228,7 +231,7 @@ if st.session_state['analysis_started']:
         # 邏輯：如果是 Demo 模式，直接用假資料
         if demo_mode:
              df = generate_mock_data(days)
-             beta = 1.3 # Demo 預設一個較高的 Beta 讓權重比較好看
+             beta = 1.3 # Demo 預設 Beta
              st.toast("🔥 目前處於演示模式 (Using Mock Data)", icon="🧪")
         else:
             try:
@@ -272,7 +275,7 @@ if st.session_state['analysis_started']:
         last_date = df.index[-1]
 
     except Exception as e:
-        st.error(f"嚴重系統錯誤: {e}")
+        st.error(f"數據處理錯誤: {e}")
         st.stop()
 
     # ==========================
@@ -304,7 +307,7 @@ if st.session_state['analysis_started']:
         with col_news:
             st.subheader("📰 多源輿情偵測")
             
-            # 如果是演示模式，顯示假新聞
+            # 演示模式：顯示假資料
             if demo_mode:
                 st.markdown("**Google News 主流媒體**")
                 st.caption("⚠️ 演示模式：模擬新聞數據")
@@ -344,9 +347,9 @@ if st.session_state['analysis_started']:
             st.subheader("🤖 Gemini 雙軌決策報告")
             with st.spinner("AI 正在進行思維鏈推論 (Chain of Thought)..."):
                 try:
-                    # 如果是演示模式，回傳假 JSON
+                    # 演示模式：回傳假 JSON
                     if demo_mode:
-                        time.sleep(2) # 假裝思考
+                        time.sleep(2) 
                         ai_data = {
                             "sentiment_weight": 75,
                             "weight_reason": "【演示模式】偵測到 Beta 值高 (1.3) 且社群討論熱度高，判定為消息面主導。",
@@ -360,9 +363,8 @@ if st.session_state['analysis_started']:
                             "analysis_report": f"## {stock_name} 雙軌分析報告 (演示版)\n\n1. **技術面分析**：股價站上均線，RSI 指標 ({df['RSI'].iloc[-1]:.2f}) 顯示動能強勁。\n2. **市場情緒**：主流媒體與 PTT 皆呈現看多趨勢。\n3. **預測**：短期內有望挑戰前高。\n\n*註：此為演示模式生成之模擬數據。*"
                         }
                     else:
-                        # 正常呼叫 API
+                        # 正常模式
                         model = genai.GenerativeModel(selected_model_name, generation_config=genai.types.GenerationConfig(temperature=0.2))
-                        
                         today_str = datetime.now().strftime("%Y年%m月%d日")
                         suggested_weight = 50
                         if beta > 1.2: suggested_weight = 70
@@ -389,6 +391,7 @@ if st.session_state['analysis_started']:
                         clean_text = re.sub(r'```json|```', '', response.text).strip()
                         ai_data = json.loads(clean_text)
                     
+                    # 顯示結果
                     if 'sentiment_weight' in ai_data:
                         w = ai_data['sentiment_weight']
                         st.info(f"⚖️ 消息權重: {w}% (Beta校正) | 技術權重: {100-w}%")
@@ -411,7 +414,6 @@ if st.session_state['analysis_started']:
 
                 except Exception as e:
                     st.error(f"AI 分析失敗: {e}")
-                    st.markdown(f"**系統提示**：AI 連線不穩定，但根據技術指標 RSI={df['RSI'].iloc[-1]:.2f}，建議區間操作。")
         
         st.plotly_chart(fig, use_container_width=True)
 
@@ -421,6 +423,7 @@ if st.session_state['analysis_started']:
     with tab2:
         st.divider() 
         mc_col1, mc_col2 = st.columns([1, 3])
+        
         try:
             log_returns, daily_volatility, drift, annual_volatility = calculate_metrics(df)
         except Exception as e:
@@ -430,15 +433,18 @@ if st.session_state['analysis_started']:
             st.warning("⚠️ 使用預設波動率參數 (Demo Mode)")
 
         with mc_col1:
-            st.subheader("參數設定")
-            sim_days = st.slider("模擬天數", 30, 365, 90)
-            n_simulations = st.slider("模擬次數", 100, 1000, 500)
-            initial_investment = st.number_input("投資金額", value=100000, step=10000)
-            st.metric("年化波動率", f"{annual_volatility*100:.2f}%")
-            st.metric("日均漂移率 (Drift)", f"{drift*100:.4f}%")
+            with st.form("mc_form"):
+                st.subheader("參數設定")
+                sim_days = st.slider("模擬天數", 30, 365, 90)
+                n_simulations = st.slider("模擬次數", 100, 1000, 500)
+                initial_investment = st.number_input("投資金額", value=100000, step=10000)
+                st.metric("年化波動率", f"{annual_volatility*100:.2f}%")
+                st.metric("日均漂移率 (Drift)", f"{drift*100:.4f}%")
+                st.write("") 
+                submitted = st.form_submit_button("🎲 開始模擬運算", type="primary", use_container_width=True)
 
         with mc_col2:
-            if st.button("🎲 開始模擬運算", type="primary", use_container_width=True):
+            if submitted:
                 with st.spinner("正在計算 1000+ 條平行宇宙路徑..."):
                     last_price = last_close
                     all_paths = []
