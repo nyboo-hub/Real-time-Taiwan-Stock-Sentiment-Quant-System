@@ -47,6 +47,7 @@ else:
             st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # --- 3. 進階模型選擇器 ---
+# 預設改為你指定的 Gemma 模型
 selected_model_name = "gemma-3n-e4b-it"
 
 # 只有在非演示模式且有 API Key 時才顯示模型選擇
@@ -118,7 +119,7 @@ def fetch_ptt_sentiment(keyword, limit=5, retries=3):
     if 'demo_mode' in globals() and demo_mode:
         return [f"[{keyword}] 營收創新高，散戶信心爆棚 (Demo)", f"[{keyword}] 外資調升目標價 (Demo)", f"[{keyword}] 技術面突破前高 (Demo)"]
 
-    url = f"https://www.ptt.cc/bbs/Stock/search?q={keyword}"
+    url = f"[https://www.ptt.cc/bbs/Stock/search?q=](https://www.ptt.cc/bbs/Stock/search?q=){keyword}"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Cookie': 'over18=1'}
     
     for attempt in range(retries):
@@ -500,4 +501,3 @@ if st.session_state['analysis_started']:
                     if st.button("清除模擬結果"):
                         st.session_state.run_mc = False
                         st.rerun()
-```
