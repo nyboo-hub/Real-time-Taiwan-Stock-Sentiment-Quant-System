@@ -51,17 +51,23 @@ else:
             st.caption("提示：部署到 Streamlit Cloud 後可設定 Secrets 隱藏此欄位")
 
 # --- 3. 模型選擇 ---
-selected_model_name = "gemini-1.5-flash" # 預設用 flash 比較快
+# 改用 Gemma 2B 模型，比較輕量，避免上線後 API 配額爆掉 (Rate Limit)
+selected_model_name = "gemma-3n-e2b-it" 
 
 if api_key and not demo_mode: 
     st.sidebar.header("🤖 AI 模型設定")
     try:
         genai.configure(api_key=api_key)
         
-        # 這些是目前可以用的模型列表
-        target_models = ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
+        # 把想用的模型列出來，這裡特別加入 Gemma
+        target_models = [
+            'gemma-3n-e2b-it',      # 預設指定這隻，比較穩
+            'gemini-2.0-flash-exp', 
+            'gemini-1.5-flash', 
+            'gemini-1.5-pro'
+        ]
         
-        # 嘗試動態抓取 Google 目前開放的模型
+        # 嘗試動態抓取 Google 目前開放的模型 (防呆)
         try:
             api_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         except:
@@ -71,14 +77,18 @@ if api_key and not demo_mode:
         all_options = list(set(target_models + api_models))
         all_options.sort()
         
-        # 我希望優先顯示比較新的模型，所以手動調整順序
-        priorities = ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro']
+        # 調整下拉選單的順序，把 Gemma 放第一個當預設
+        priorities = ['gemma-3n-e2b-it', 'gemini-1.5-flash', 'gemini-2.0-flash-exp']
         for p in reversed(priorities):
             if p in all_options:
                 all_options.remove(p) 
                 all_options.insert(0, p) 
 
         selected_model_name = st.sidebar.selectbox("選擇推論模型 (Model)", all_options, index=0)
+        
+        # 顯示一下目前是用哪種模式，讓自己知道
+        if "gemma" in selected_model_name:
+            st.sidebar.caption("✅ 目前使用輕量化 Gemma 模型 (省流量)")
             
     except Exception as e:
         st.sidebar.error(f"連線錯誤，將使用預設模型")
@@ -527,3 +537,4 @@ if st.session_state['analysis_started']:
                     for k in keys_to_clean:
                         if k in st.session_state: del st.session_state[k]
                     st.rerun()
+
