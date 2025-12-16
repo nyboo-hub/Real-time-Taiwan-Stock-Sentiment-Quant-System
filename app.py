@@ -205,7 +205,7 @@ with tab2:
     st.markdown(
         """
         <div style="background: linear-gradient(90deg, #ff9966, #ff5e62); color: white; padding: 20px; border-radius: 15px; margin: 0px 0px 20px 0px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <h3 style="margin-top:0; color: white; text-shadow: 1px 1px 2px black;">🎲 蒙地卡羅白話解釋</h3>
+            <h3 style="margin-top:0; color: white; text-shadow: 1px 1px 2px black;">🎲 蒙地卡羅解釋</h3>
             <div style="text-align: left; display: inline-block; background: rgba(0,0,0,0.1); padding: 15px; border-radius: 10px;">
                 <b>為什麼圖長這樣？</b><br>
                 1. <b>淡藍色線像扇子越張越開</b> → 時間越久未來越不確定<br>
@@ -214,7 +214,7 @@ with tab2:
                 4. <b>紅黃綠燈 = 實務風控標準</b> → 紅燈表示老闆會叫你停損！<br>
             </div>
             <br><br>
-            <b style="font-size: 1.2em; background: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 5px;">簡單說：這是用 500 個平行宇宙幫你預演未來會不會爆倉！</b>
+            <b style="font-size: 1.2em; background: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 5px;">簡單說就是是用 500 個平行宇宙幫你預演未來會不會爆倉！</b>
         </div>
         """,
         unsafe_allow_html=True
@@ -501,3 +501,4 @@ if st.session_state['analysis_started']:
                     if st.button("清除模擬結果"):
                         st.session_state.run_mc = False
                         st.rerun()
+
